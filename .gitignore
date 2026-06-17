@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Database
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# PM2
+.pm2/
+
+# Docker
+.docker/
+
+# Certificates
+certs/
+*.pem
+*.key
+*.crt
+
+# Misc
+*.tmp
+*.temp
+nul
+Nuevo documento de texto.txt

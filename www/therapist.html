@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coter Pro – Terapeuta</title>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+:root{--p:#6366f1;--s:#10b981;--w:#f59e0b;--d:#ef4444;--g:#f8fafc;--t:#1e293b;--b:#e2e8f0}
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',system-ui,sans-serif}
+body{background:var(--g);color:var(--t);min-height:100vh}
+.sidebar{width:260px;background:#fff;position:fixed;height:100vh;box-shadow:2px 0 20px rgba(0,0,0,.08);z-index:100;display:flex;flex-direction:column}
+.logo{font-size:2rem;font-weight:900;color:var(--p);text-align:center;padding:30px 0}
+.nav-item{padding:16px 28px;display:flex;align-items:center;gap:12px;color:#64748b;cursor:pointer;font-weight:500;transition:.2s;border-left:3px solid transparent}
+.nav-item:hover,.nav-item.active{background:#eef2ff;color:var(--p);border-left-color:var(--p);font-weight:600}
+.nav-bottom{margin-top:auto;padding:20px;border-top:1px solid var(--b)}
+.main{margin-left:260px;padding:32px;min-height:100vh}
+h1{font-size:2.2rem;font-weight:800;margin-bottom:28px;display:flex;justify-content:space-between;align-items:center}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px;margin-bottom:28px}
+.stat-card{background:#fff;padding:24px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.06);text-align:center}
+.stat-num{font-size:3rem;font-weight:800;color:var(--p)}
+.stat-label{font-size:.95rem;color:#64748b;margin-top:4px}
+.card{background:#fff;border-radius:16px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,.06);margin-bottom:24px}
+.card h2{font-size:1.4rem;font-weight:700;margin-bottom:20px;color:var(--t)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+table{width:100%;border-collapse:collapse}
+th,td{padding:14px 18px;text-align:left;border-bottom:1px solid var(--b)}
+th{background:#f8fafc;font-weight:600;color:#475569;font-size:.9rem}
+tr:hover{background:#f8faff}
+.badge{padding:5px 12px;border-radius:20px;font-size:.8rem;font-weight:600}
+.badge-ok{background:#d1fae5;color:#065f46}
+.badge-warn{background:#fffbeb;color:#92400e}
+.badge-risk{background:#fee2e2;color:#991b1b}
+.btn{padding:10px 20px;border:none;border-radius:10px;color:#fff;cursor:pointer;font-weight:600;font-size:.9rem;transition:.2s}
+.btn:hover{opacity:.9;transform:translateY(-1px)}
+.btn-p{background:var(--p)}
+.btn-s{background:var(--s)}
+.btn-d{background:var(--d)}
+.btn-w{background:var(--w);color:#333}
+.btn-sm{padding:6px 14px;font-size:.8rem}
+.code-box{font-size:2.8rem;font-weight:800;color:var(--p);letter-spacing:8px;background:linear-gradient(135deg,#eef2ff,#c7d2fe);padding:30px;border-radius:20px;text-align:center;margin:20px 0}
+.code-box small{display:block;font-size:.9rem;font-weight:400;color:#666;margin-top:8px;letter-spacing:0}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:#fff;border-radius:20px;width:90%;max-width:900px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column}
+.modal-header{padding:20px 28px;border-bottom:1px solid var(--b);display:flex;justify-content:space-between;align-items:center}
+.modal-header h2{font-size:1.5rem;font-weight:700}
+.modal-body{flex:1;overflow-y:auto;padding:24px}
+.modal-tabs{display:flex;gap:0;border-bottom:2px solid var(--b);margin-bottom:20px}
+.modal-tab{padding:12px 24px;cursor:pointer;font-weight:600;color:#64748b;border-bottom:3px solid transparent;transition:.2s}
+.modal-tab:hover,.modal-tab.active{color:var(--p);border-bottom-color:var(--p)}
+.modal-tab-content{display:none}
+.modal-tab-content.active{display:block}
+.chat-box{max-height:320px;overflow-y:auto;background:#f8fafc;border-radius:12px;padding:16px;margin-bottom:16px}
+.msg{padding:12px 16px;border-radius:14px;margin:8px 0;max-width:85%;word-wrap:break-word}
+.msg.therapist{background:linear-gradient(135deg,#e0e7ff,#c7d2fe);margin-left:auto;text-align:right}
+.msg.patient{background:#fff;border:1px solid #e2e8f0}
+.msg small{display:block;font-size:.75rem;color:#64748b;margin-top:4px}
+.chat-input{display:flex;gap:10px}
+.chat-input input{flex:1;padding:12px 16px;border-radius:12px;border:2px solid var(--b);font-size:.95rem}
+.checkin-item{padding:14px;background:#f8fafc;border-radius:10px;margin:8px 0;display:flex;gap:16px;align-items:center}
+.checkin-mood{font-size:2rem;font-weight:800;min-width:50px;text-align:center}
+.task-item{padding:14px;background:#fffbeb;border-radius:10px;margin:8px 0;border-left:4px solid var(--w)}
+.goal-item{padding:14px;background:#f0fdf4;border-radius:10px;margin:8px 0;border-left:4px solid var(--s)}
+.soap-note{padding:16px;background:#f8fafc;border-radius:12px;margin:12px 0;border-left:4px solid #8b5cf6;cursor:pointer;transition:.2s}
+.soap-note:hover{background:#f1f5f9}
+.soap-note-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.soap-note-date{font-size:.8rem;color:#888}
+.soap-note-field{margin:8px 0;padding:10px 14px;background:#fff;border-radius:8px;font-size:.88rem;line-height:1.5}
+.soap-note-field strong{color:#8b5cf6;display:block;font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.soap-note-actions{display:flex;gap:8px;margin-top:10px}
+.soap-form{background:#f8fafc;border-radius:14px;padding:18px;margin-bottom:16px}
+.soap-form textarea{width:100%;padding:12px;border:2px solid #e2e8f0;border-radius:10px;font-family:inherit;font-size:.88rem;min-height:60px;resize:vertical;margin-bottom:10px}
+.soap-form textarea:focus{border-color:#8b5cf6;outline:none;box-shadow:0 0 0 3px rgba(139,92,246,.1)}
+.soap-form label{display:block;font-weight:600;font-size:.85rem;color:#64748b;margin-bottom:4px}
+.progress-bar{height:8px;background:#e2e8f0;border-radius:4px;margin-top:8px;overflow:hidden}
+.progress-fill{height:100%;background:var(--s);border-radius:4px;transition:.3s}
+.library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.template-card{background:#fff;border-radius:14px;padding:20px;box-shadow:0 4px 16px rgba(0,0,0,.06);border-left:4px solid var(--p);cursor:pointer;transition:.2s}
+.template-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.1)}
+.template-card.expanded{border-left-color:var(--s)}
+.template-category{font-size:.8rem;font-weight:600;color:var(--p);margin-bottom:6px}
+.template-title{font-size:1.1rem;font-weight:700;margin-bottom:6px}
+.template-meta{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.template-difficulty{padding:3px 10px;border-radius:12px;font-size:.75rem;font-weight:600}
+.diff-baja{background:#d1fae5;color:#065f46}
+.diff-media{background:#fffbeb;color:#92400e}
+.diff-alta{background:#fee2e2;color:#991b1b}
+.template-duration{font-size:.8rem;color:#888}
+.template-instructions{display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--b);font-size:.9rem;line-height:1.7;white-space:pre-wrap;color:#475569}
+.template-card.expanded .template-instructions{display:block}
+.template-card.custom-template{border-left-color:#f59e0b}
+.template-card.system-template{border-left-color:var(--p)}
+.custom-badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:.7rem;font-weight:700;background:#fef3c7;color:#92400e;margin-left:6px;vertical-align:middle}
+.template-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.category-filter{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}
+.category-chip{padding:8px 16px;border-radius:20px;border:2px solid var(--b);background:#fff;cursor:pointer;font-size:.85rem;font-weight:500;transition:.2s}
+.category-chip:hover,.category-chip.active{background:var(--p);color:#fff;border-color:var(--p)}
+.library-search{width:100%;padding:12px 16px;border-radius:12px;border:2px solid var(--b);font-size:.95rem;margin-bottom:16px}
+.library-search:focus{border-color:var(--p);outline:none}
+.login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#667eea,#764ba2)}
+.login-card{background:#fff;padding:50px 40px;border-radius:24px;width:400px;box-shadow:0 30px 80px rgba(0,0,0,.3);text-align:center}
+.login-card h1{font-size:2.4rem;color:var(--p);margin-bottom:8px}
+.login-card input{width:100%;padding:16px;border-radius:12px;border:2px solid var(--b);font-size:1rem;margin:12px 0}
+.login-card button{width:100%;padding:16px;border:none;border-radius:12px;background:var(--p);color:#fff;font-size:1.1rem;font-weight:700;cursor:pointer;margin-top:8px}
+.login-card button:hover{opacity:.9}
+.hidden{display:none!important}
+.calendar-nav{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:20px}
+.calendar-nav h2{font-size:1.4rem;font-weight:700;min-width:180px;text-align:center;margin:0}
+.calendar-nav button{background:var(--p);color:#fff;border:none;padding:10px 18px;border-radius:10px;cursor:pointer;font-weight:600;font-size:.85rem;transition:.2s}
+.calendar-nav button:hover{opacity:.85;transform:translateY(-1px)}
+.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:16px}
+.calendar-day-header{text-align:center;padding:10px 4px;font-weight:700;font-size:.8rem;color:#94a3b8;text-transform:uppercase}
+.calendar-day{background:#fff;border-radius:10px;padding:8px;min-height:72px;cursor:pointer;transition:.2s;border:2px solid transparent;position:relative;display:flex;flex-direction:column;align-items:center}
+.calendar-day:hover{border-color:#c7d2fe;box-shadow:0 4px 12px rgba(0,0,0,.06)}
+.calendar-day.other-month{background:#f1f5f9;color:#94a3b8}
+.calendar-day.today{border-color:var(--p);box-shadow:0 0 0 3px rgba(99,102,241,.15)}
+.calendar-day.selected{background:#eef2ff;border-color:var(--p)}
+.calendar-day-num{font-size:1rem;font-weight:700;margin-bottom:4px}
+.calendar-dots{display:flex;gap:3px;flex-wrap:wrap;justify-content:center}
+.calendar-dot{width:8px;height:8px;border-radius:50%}
+.calendar-dot.mood-high{background:#10b981}
+.calendar-dot.mood-mid{background:#f59e0b}
+.calendar-dot.mood-low{background:#ef4444}
+.calendar-dot.task-due{background:#6366f1}
+.calendar-dot.task-overdue{background:#ef4444}
+.calendar-day-panel{background:#fff;border-radius:14px;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,.08);margin-top:16px}
+.calendar-day-panel h3{font-size:1.1rem;font-weight:700;margin-bottom:12px;color:var(--t)}
+.calendar-day-panel h4{font-size:.9rem;font-weight:700;color:var(--p);margin:12px 0 8px}
+.calendar-event{padding:10px 14px;border-radius:10px;margin:6px 0;display:flex;align-items:center;gap:10px;font-size:.88rem}
+.calendar-event.checkin{background:#f0fdf4;border-left:3px solid var(--s)}
+.calendar-event.task-item-cal{background:#eff6ff;border-left:3px solid var(--p)}
+.calendar-event.task-overdue-cal{background:#fef2f2;border-left:3px solid var(--d)}
+.calendar-empty{text-align:center;color:#94a3b8;padding:20px;font-size:.9rem}
+@media(max-width:768px){.sidebar{width:100%;height:auto;position:relative;flex-direction:row;overflow-x:auto}.main{margin-left:0}.login-card{width:90%}}
+</style>
+</head>
+<body>
+
+<div id="loginScreen" class="login-screen">
+<div class="login-card">
+<h1>Coter Pro</h1>
+<p style="color:#64748b;margin-bottom:28px">Panel del Terapeuta</p>
+<input type="email" id="loginEmail" placeholder="Email" value="ana@coter.com">
+<input type="password" id="loginPassword" placeholder="Contraseña" value="123456">
+<button onclick="doLogin()">Iniciar sesión</button>
+<p style="margin-top:16px;font-size:.85rem;color:#888">¿No tienes cuenta? <a href="#" onclick="showRegister()" style="color:var(--p)">Regístrate</a></p>
+</div>
+</div>
+
+<div id="registerScreen" class="login-screen hidden">
+<div class="login-card">
+<h1>Coter Pro</h1>
+<p style="color:#64748b;margin-bottom:28px">Registro de Terapeuta</p>
+<input type="text" id="regName" placeholder="Nombre completo">
+<input type="email" id="regEmail" placeholder="Email">
+<input type="text" id="regSpecialty" placeholder="Especialidad (ej: Psicología clínica)">
+<input type="password" id="regPassword" placeholder="Contraseña (mín. 6 caracteres)">
+<button onclick="doRegister()">Crear cuenta</button>
+<button onclick="showLogin()" style="background:#666;margin-top:8px">Volver al login</button>
+</div>
+</div>
+
+<div id="appScreen" class="hidden">
+<div class="sidebar">
+<div class="logo">🧠 Coter Pro</div>
+<div class="nav-item active" data-tab="dashboard">📊 Dashboard</div>
+<div class="nav-item" data-tab="patients">👥 Pacientes</div>
+<div class="nav-item" data-tab="code">🔑 Código de acceso</div>
+<div class="nav-item" data-tab="calendar">📅 Calendario</div>
+<div class="nav-item" data-tab="library">📚 Biblioteca TCC</div>
+<div class="nav-bottom"><button class="btn btn-d" style="width:100%" onclick="logout()">Cerrar sesión</button></div>
+</div>
+<div class="main">
+<div id="tab-dashboard" class="tab-content active">
+<h1>Dashboard <span style="font-size:1rem;font-weight:400;color:#888" id="therapistName"></span></h1>
+<div class="stats-grid">
+<div class="stat-card"><div class="stat-num" id="statPatients">-</div><div class="stat-label">Pacientes activos</div></div>
+<div class="stat-card"><div class="stat-num" id="statCheckins">-</div><div class="stat-label">Check-ins hoy</div></div>
+<div class="stat-card"><div class="stat-num" id="statTasks">-</div><div class="stat-label">Tareas pendientes</div></div>
+<div class="stat-card"><div class="stat-num" id="statRisk" style="color:var(--d)">-</div><div class="stat-label">En riesgo</div></div>
+</div>
+<div class="card"><h2>📈 Tendencia semanal</h2><canvas id="trendChart" height="80"></canvas></div>
+<div class="card"><h2>🕐 Actividad reciente</h2><div id="recentActivity">Cargando...</div></div>
+</div>
+
+<div id="tab-patients" class="tab-content">
+<h1>Pacientes <button class="btn btn-p" onclick="loadPatients()">🔄 Actualizar</button></h1>
+<div class="card"><table><thead><tr><th>Paciente</th><th>Conectado</th><th>Último check-in</th><th>Ánimo</th><th>Estado</th><th>Acción</th></tr></thead>
+<tbody id="patientsTableBody"><tr><td colspan="6" style="text-align:center;padding:40px">Cargando...</td></tr></tbody></table></div>
+</div>
+
+<div id="tab-calendar" class="tab-content">
+<h1>📅 Calendario de actividad</h1>
+<div class="card">
+<div class="calendar-nav">
+<button onclick="prevMonth()">◀</button>
+<h2 id="calendarMonthLabel">Junio 2026</h2>
+<button onclick="nextMonth()">▶</button>
+<button style="background:var(--s);margin-left:8px" onclick="goToToday()">Hoy</button>
+</div>
+<div class="calendar-grid" id="calendarGrid">Cargando...</div>
+<div class="calendar-day-panel hidden" id="calendarDayPanel">
+<h3 id="calendarDayTitle"></h3>
+<div id="calendarDayContent"></div>
+</div>
+</div>
+</div>
+
+<div id="tab-library" class="tab-content">
+<h1>📚 Biblioteca de tareas TCC <button class="btn btn-w" onclick="showCreateTemplate()" style="font-size:.9rem">➕ Crear plantilla</button></h1>
+<div class="card">
+<input type="text" class="library-search" id="librarySearch" placeholder="🔍 Buscar tarea por título o descripción..." oninput="renderTemplates()">
+<div class="category-filter" id="categoryFilter"></div>
+<div class="library-grid" id="libraryGrid">Cargando biblioteca...</div>
+</div>
+</div>
+
+<div id="tab-code" class="tab-content">
+<h1>Código de acceso</h1>
+<div class="card" style="max-width:600px;margin:40px auto;text-align:center">
+<h2>Código activo para pacientes</h2>
+<div class="code-box" id="currentCode">Cargando...</div>
+<div style="display:flex;gap:12px;justify-content:center;margin-top:20px">
+<button class="btn btn-s" style="padding:16px 40px;font-size:1.1rem" onclick="generateCode()">🎫 Generar código genérico</button>
+<button class="btn btn-p" style="padding:16px 40px;font-size:1.1rem" onclick="showNewPatient()">👤 Nuevo paciente</button>
+</div>
+<p style="margin-top:16px;color:#888;font-size:.85rem">Comparte este código con tus pacientes para que se conecten</p>
+</div>
+</div>
+</div>
+</div>
+
+<div class="modal-overlay" id="patientModal">
+<div class="modal">
+<div class="modal-header">
+<h2 id="modalPatientName">Paciente</h2>
+<div style="display:flex;gap:8px">
+<button class="btn btn-w btn-sm" onclick="exportPatientData()">📥 Exportar</button>
+<button class="btn btn-d btn-sm" onclick="closePatientModal()">✕</button>
+</div>
+</div>
+<div class="modal-tabs">
+<div class="modal-tab active" data-ptab="ptab-chat">💬 Chat</div>
+<div class="modal-tab" data-ptab="ptab-checkins">📋 Check-ins</div>
+<div class="modal-tab" data-ptab="ptab-tasks">✅ Tareas</div>
+<div class="modal-tab" data-ptab="ptab-goals">🎯 Objetivos</div>
+<div class="modal-tab" data-ptab="ptab-notes">📝 Notas clínicas</div>
+</div>
+<div class="modal-body">
+<div id="ptab-chat" class="modal-tab-content active">
+<div class="chat-box" id="patientChat"></div>
+<div class="chat-input">
+<input type="text" id="chatMsgInput" placeholder="Escribe un mensaje..." onkeypress="if(event.key==='Enter')sendTherapistMsg()">
+<button class="btn btn-p" onclick="sendTherapistMsg()">Enviar</button>
+</div>
+</div>
+<div id="ptab-checkins" class="modal-tab-content"><div id="patientCheckins">Cargando...</div></div>
+<div id="ptab-tasks" class="modal-tab-content">
+<button class="btn btn-s" style="margin-bottom:16px" onclick="showAddTask()">+ Nueva tarea</button>
+<div id="patientTasks">Cargando...</div>
+</div>
+<div id="ptab-goals" class="modal-tab-content">
+<button class="btn btn-s" style="margin-bottom:16px" onclick="showAddGoal()">+ Nuevo objetivo</button>
+<div id="patientGoals">Cargando...</div>
+</div>
+<div id="ptab-notes" class="modal-tab-content">
+<button class="btn btn-s" style="margin-bottom:16px" onclick="showAddNote()">+ Nueva nota SOAP</button>
+<div id="patientNotes">Cargando...</div>
+</div>
+</div>
+</div>
+</div>
+
+<script>
+// URL de API: usa ruta relativa para funcionar en cualquier dominio
+const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const API = isLocal
+  ? 'http://localhost:3000/api/v1'
+  : '/api/v1';
+let token=null,therapist=null,currentPatientId=null,patientData=null,trendChart=null;
+let templates=[],templateCategories=[],activeCategory=null;
+
+async function doLogin(){
+const email=document.getElementById('loginEmail').value.trim();
+const password=document.getElementById('loginPassword').value.trim();
+if(!email||!password)return Swal.fire('Error','Completa todos los campos','error');
+try{
+const r=await fetch(`${API}/therapists/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+const d=await r.json();
+if(d.success){token=d.token;therapist=d.therapist;localStorage.setItem('coter_therapist',JSON.stringify({token,therapist}));showApp();}
+else Swal.fire('Error',d.error||'Credenciales inválidas','error');
+}catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
+}
+async function doRegister(){
+const name=document.getElementById('regName').value.trim();
+const email=document.getElementById('regEmail').value.trim();
+const specialty=document.getElementById('regSpecialty').value.trim();
+const password=document.getElementById('regPassword').value.trim();
+if(!name||!email||!specialty||!password)return Swal.fire('Error','Completa todos los campos','error');
+if(password.length<6)return Swal.fire('Error','Contraseña: mínimo 6 caracteres','error');
+try{
+const r=await fetch(`${API}/therapists/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,specialty,password})});
+const d=await r.json();
+if(d.success){token=d.token;therapist=d.therapist;localStorage.setItem('coter_therapist',JSON.stringify({token,therapist}));showApp();}
+else Swal.fire('Error',d.error||'Error al registrarse','error');
+}catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
+}
+function showLogin(){document.getElementById('registerScreen').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');}
+function showRegister(){document.getElementById('loginScreen').classList.add('hidden');document.getElementById('registerScreen').classList.remove('hidden');}
+function logout(){localStorage.removeItem('coter_therapist');location.reload();}
+function api(url,opts={}){return fetch(url,{...opts,headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`,...(opts.headers||{})}});}
+
+function showApp(){
+document.getElementById('loginScreen').classList.add('hidden');
+document.getElementById('registerScreen').classList.add('hidden');
+document.getElementById('appScreen').classList.remove('hidden');
+document.getElementById('therapistName').textContent=therapist.name;
+loadDashboard();loadPatients();loadCode();
+setInterval(loadDashboard,30000);
+}
+
+async function loadDashboard(){
+try{
+const r=await api(`${API}/therapists/dashboard`);const d=await r.json();
+if(!d.success)return;
+const db=d.dashboard;
+document.getElementById('statPatients').textContent=db.activePatients;
+document.getElementById('statCheckins').textContent=db.todayCheckins;
+document.getElementById('statTasks').textContent=db.pendingTasks;
+document.getElementById('statRisk').textContent=db.atRisk;
+updateTrendChart(db.weeklyTrend||[]);
+const act=document.getElementById('recentActivity');
+if(!db.recentActivity?.length){act.innerHTML='<p style="color:#888;padding:20px;text-align:center">Sin actividad reciente</p>';return;}
+act.innerHTML=db.recentActivity.map(a=>`<div style="padding:12px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between"><span>${a.patient_name||'Paciente '+a.patient_id?.slice(0,8)}</span><span>Ánimo: <strong>${a.mood}/10</strong></span><span style="color:#888">${new Date(a.created_at).toLocaleString('es-ES')}</span></div>`).join('');
+}catch(e){console.error(e);}
+}
+function updateTrendChart(data){
+const ctx=document.getElementById('trendChart');if(trendChart)trendChart.destroy();
+if(!data.length)return;
+trendChart=new Chart(ctx,{type:'line',data:{labels:data.map(d=>d.day),datasets:[
+{label:'Ánimo',data:data.map(d=>d.avg_mood),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.1)',tension:.4,fill:true},
+{label:'Ansiedad',data:data.map(d=>d.avg_anxiety),borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.1)',tension:.4,fill:true}
+]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{min:1,max:10}}}});
+}
+
+async function loadPatients(){
+try{
+const r=await api(`${API}/therapists/patients`);const d=await r.json();
+const tbody=document.getElementById('patientsTableBody');
+if(!d.success||!d.patients?.length){tbody.innerHTML='<tr><td colspan="6" style="text-align:center;padding:40px;color:#888">No tienes pacientes aún</td></tr>';return;}
+tbody.innerHTML=d.patients.map(p=>{
+const badge=p.last_mood<=3?'badge-risk':p.last_mood>=7?'badge-ok':'badge-warn';
+return`<tr><td><strong>${p.name||'Anónimo'}</strong><br><small style="color:#888">${p.id?.slice(0,12)}...</small></td><td>${new Date(p.connected_at).toLocaleDateString('es-ES')}</td><td>${p.last_checkin?new Date(p.last_checkin).toLocaleDateString('es-ES'):'Nunca'}</td><td><strong>${p.last_mood||'-'}/10</strong></td><td><span class="badge ${badge}">${p.last_mood<=3?'⚠️ Riesgo':'✅ Estable'}</span></td><td><button class="btn btn-p btn-sm" onclick="openPatient('${p.id}')">📋 Ver</button></td></tr>`;
+}).join('');
+}catch(e){console.error(e);}
+}
+
+async function openPatient(patientId){
+currentPatientId=patientId;document.getElementById('patientModal').classList.add('show');
+try{
+const r=await api(`${API}/therapists/patients/${patientId}`);const d=await r.json();
+if(!d.success)return Swal.fire('Error','Paciente no encontrado','error');
+patientData=d.patient;
+document.getElementById('modalPatientName').textContent=patientData.name||'Paciente '+patientId.slice(0,8);
+renderChat();renderCheckins();renderTasks();renderGoals();renderNotes();
+}catch(e){console.error(e);}
+}
+function closePatientModal(){document.getElementById('patientModal').classList.remove('show');currentPatientId=null;patientData=null;}
+
+function renderChat(){
+const box=document.getElementById('patientChat');
+const msgs=(patientData.messages||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
+if(!msgs.length){box.innerHTML='<p style="text-align:center;color:#888;padding:20px">No hay mensajes aún</p>';return;}
+box.innerHTML=msgs.map(m=>`<div class="msg ${m.is_therapist?'therapist':'patient'}"><div>${m.message}</div><small>${new Date(m.created_at).toLocaleString('es-ES')}</small></div>`).join('');
+box.scrollTop=box.scrollHeight;
+}
+async function sendTherapistMsg(){
+const input=document.getElementById('chatMsgInput');const msg=input.value.trim();
+if(!msg||!currentPatientId)return;
+await api(`${API}/therapists/patients/${currentPatientId}/messages`,{method:'POST',body:JSON.stringify({message:msg})});
+input.value='';
+const r=await api(`${API}/therapists/patients/${currentPatientId}`);const d=await r.json();
+if(d.success){patientData=d.patient;renderChat();}
+}
+
+function renderCheckins(){
+const box=document.getElementById('patientCheckins');const cis=patientData.checkIns||[];
+if(!cis.length){box.innerHTML='<p style="text-align:center;color:#888;padding:20px">Sin check-ins</p>';return;}
+box.innerHTML=cis.slice(0,30).map(c=>`<div class="checkin-item"><div class="checkin-mood" style="color:${c.mood<=3?'#ef4444':c.mood>=7?'#10b981':'#f59e0b'}">${c.mood}</div><div><strong>Ánimo ${c.mood}/10</strong> | Ansiedad ${c.anxiety}/10 | Energía ${c.energy||'-'}/10<br><small style="color:#888">${new Date(c.created_at).toLocaleString('es-ES')}</small>${c.thoughts?`<br><em>"${c.thoughts}"</em>`:''}</div></div>`).join('');
+}
+
+function renderTasks(){
+const box=document.getElementById('patientTasks');const tasks=patientData.assignments||[];
+if(!tasks.length){box.innerHTML='<p style="text-align:center;color:#888;padding:20px">Sin tareas asignadas</p>';return;}
+box.innerHTML=tasks.map(t=>`<div class="task-item"><strong>${t.title}</strong> <span class="badge ${t.status==='completed'?'badge-ok':'badge-warn'}">${t.status==='completed'?'✅ Completada':'⏳ Pendiente'}</span><br><small>${t.instructions}</small>${t.due_date?`<br><small>📅 Vence: ${new Date(t.due_date).toLocaleDateString('es-ES')}</small>`:''}${t.status!=='completed'?`<br><button class="btn btn-s btn-sm" style="margin-top:8px" onclick="completeTask('${t.id}')">Marcar completada</button>`:''}</div>`).join('');
+}
+async function completeTask(taskId){
+await api(`${API}/therapists/patients/${currentPatientId}/assignments/${taskId}`,{method:'PUT',body:JSON.stringify({completed:true})});
+const r=await api(`${API}/therapists/patients/${currentPatientId}`);const d=await r.json();
+if(d.success){patientData=d.patient;renderTasks();}
+}
+function showAddTask(){
+Swal.fire({title:'Nueva tarea',html:`<input id="swalTaskTitle" class="swal2-input" placeholder="Título"><input id="swalTaskType" class="swal2-input" placeholder="Tipo (ej: ejercicio)"><textarea id="swalTaskInstructions" class="swal2-textarea" placeholder="Instrucciones"></textarea>`,showCancelButton:true,confirmButtonText:'Crear',preConfirm:async()=>{
+const title=document.getElementById('swalTaskTitle').value.trim();
+const type=document.getElementById('swalTaskType').value.trim();
+const instructions=document.getElementById('swalTaskInstructions').value.trim();
+if(!title||!type||!instructions){Swal.showValidationMessage('Completa todos los campos');return false;}
+await api(`${API}/therapists/patients/${currentPatientId}/assignments`,{method:'POST',body:JSON.stringify({title,type,instructions})});
+const r=await api(`${API}/therapists/patients/${currentPatientId}`);const d=await r.json();
+if(d.success){patientData=d.patient;renderTasks();}
+}});
+}
+
+function renderGoals(){
+const box=document.getElementById('patientGoals');const goals=patientData.goals||[];
+if(!goals.length){box.innerHTML='<p style="text-align:center;color:#888;padding:20px">Sin objetivos</p>';return;}
+box.innerHTML=goals.map(g=>{
+const pct=Math.min(100,Math.round((g.current_value/g.target_value)*100));
+return`<div class="goal-item"><strong>${g.title}</strong> <span class="badge ${g.status==='completed'?'badge-ok':'badge-warn'}">${g.status==='completed'?'✅ Completado':'🎯 Activo'}</span><br><small>${g.metric}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>${g.status!=='completed'?`<input type="number" id="goalVal${g.id}" placeholder="Nuevo valor" style="width:100px;margin-top:8px;padding:6px;border-radius:8px;border:1px solid #ddd"> <button class="btn btn-s btn-sm" onclick="updateGoal('${g.id}')">Actualizar</button>`:''}</div>`;
+}).join('');
+}
+async function updateGoal(goalId){
+const val=document.getElementById('goalVal'+goalId)?.value;if(!val)return;
+await api(`${API}/therapists/patients/${currentPatientId}/goals/${goalId}`,{method:'PUT',body:JSON.stringify({current_value:parseInt(val)})});
+const r=await api(`${API}/therapists/patients/${currentPatientId}`);const d=await r.json();
+if(d.success){patientData=d.patient;renderGoals();}
+}
+// ==================== NOTAS CLÍNICAS (SOAP) ====================
+async function renderNotes(){
+const box=document.getElementById('patientNotes');
+try{
+const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes`);const d=await r.json();
+if(!d.success||!d.notes?.length){box.innerHTML='<p style="text-align:center;color:#888;padding:20px">Sin notas clínicas</p>';return;}
+box.innerHTML=d.notes.map(n=>{
+const date=new Date(n.created_at).toLocaleString('es-ES');
+const updated=n.updated_at&&n.updated_at!==n.created_at?`<span style="color:#888;font-size:.75rem"> (editada)</span>`:'';
+return`
+<div class="soap-note" id="note-${n.id}">
+<div class="soap-note-header">
+<div><strong>📝 ${date}</strong>${updated}</div>
+<div class="soap-note-date">ID: ${n.id.slice(0,8)}...</div>
+</div>
+${n.subjective?`<div class="soap-note-field"><strong>S — Subjetivo</strong>${n.subjective}</div>`:''}
+${n.objective?`<div class="soap-note-field"><strong>O — Objetivo</strong>${n.objective}</div>`:''}
+${n.assessment?`<div class="soap-note-field"><strong>A — Evaluación</strong>${n.assessment}</div>`:''}
+${n.plan?`<div class="soap-note-field"><strong>P — Plan</strong>${n.plan}</div>`:''}
+<div class="soap-note-actions">
+<button class="btn btn-w btn-sm" onclick="editNote('${n.id}')">✏️ Editar</button>
+<button class="btn btn-d btn-sm" onclick="deleteNote('${n.id}')">🗑️ Eliminar</button>
+</div>
+</div>`;
+}).join('');
+}catch(e){box.innerHTML='<p style="text-align:center;color:var(--d);padding:20px">Error al cargar notas</p>';}
+}
+
+function showAddNote(){
+Swal.fire({title:'Nueva nota clínica (SOAP)',html:`
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">S — Subjetivo</label>
+<textarea id="swalSubjective" class="swal2-textarea" placeholder="Lo que el paciente reporta: síntomas, quejas, sentimientos..." rows="2"></textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">O — Objetivo</label>
+<textarea id="swalObjective" class="swal2-textarea" placeholder="Datos observables: apariencia, conducta, check-ins recientes..." rows="2"></textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">A — Evaluación</label>
+<textarea id="swalAssessment" class="swal2-textarea" placeholder="Tu análisis clínico: diagnóstico, progreso, patrones..." rows="2"></textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">P — Plan</label>
+<textarea id="swalPlan" class="swal2-textarea" placeholder="Próximos pasos: tareas, objetivos, frecuencia de sesiones..." rows="2"></textarea>
+`,showCancelButton:true,confirmButtonText:'Guardar nota',cancelButtonText:'Cancelar',width:650,preConfirm:async()=>{
+const subjective=document.getElementById('swalSubjective').value.trim();
+const objective=document.getElementById('swalObjective').value.trim();
+const assessment=document.getElementById('swalAssessment').value.trim();
+const plan=document.getElementById('swalPlan').value.trim();
+if(!subjective&&!objective&&!assessment&&!plan){Swal.showValidationMessage('Completa al menos un campo SOAP');return false;}
+try{
+await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes`,{method:'POST',body:JSON.stringify({subjective:subjective||null,objective:objective||null,assessment:assessment||null,plan:plan||null})});
+renderNotes();Swal.fire({title:'✅ Nota guardada',icon:'success',timer:1500,showConfirmButton:false});
+}catch(e){Swal.showValidationMessage('Error al guardar la nota');}
+}});
+}
+
+function editNote(noteId){
+const r=document.getElementById('note-'+noteId);
+if(!r)return;
+const fields=r.querySelectorAll('.soap-note-field');
+const getText=(el)=>el?el.textContent.replace(/^[SOAP]\s*[—–-]\s*\w+/,'').trim():'';
+const subjective=fields[0]?getText(fields[0]):'';
+const objective=fields[1]?getText(fields[1]):'';
+const assessment=fields[2]?getText(fields[2]):'';
+const plan=fields[3]?getText(fields[3]):'';
+Swal.fire({title:'Editar nota clínica',html:`
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">S — Subjetivo</label>
+<textarea id="swalSubjective" class="swal2-textarea" rows="2">${subjective.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">O — Objetivo</label>
+<textarea id="swalObjective" class="swal2-textarea" rows="2">${objective.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">A — Evaluación</label>
+<textarea id="swalAssessment" class="swal2-textarea" rows="2">${assessment.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600;color:#8b5cf6">P — Plan</label>
+<textarea id="swalPlan" class="swal2-textarea" rows="2">${plan.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+`,showCancelButton:true,confirmButtonText:'Guardar cambios',cancelButtonText:'Cancelar',width:650,preConfirm:async()=>{
+const s=document.getElementById('swalSubjective').value.trim();
+const o=document.getElementById('swalObjective').value.trim();
+const a=document.getElementById('swalAssessment').value.trim();
+const p=document.getElementById('swalPlan').value.trim();
+if(!s&&!o&&!a&&!p){Swal.showValidationMessage('Completa al menos un campo SOAP');return false;}
+try{
+await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes/${noteId}`,{method:'PUT',body:JSON.stringify({subjective:s||null,objective:o||null,assessment:a||null,plan:p||null})});
+renderNotes();Swal.fire({title:'✅ Nota actualizada',icon:'success',timer:1500,showConfirmButton:false});
+}catch(e){Swal.showValidationMessage('Error al actualizar');}
+}});
+}
+
+async function deleteNote(noteId){
+const result=await Swal.fire({title:'¿Eliminar nota?',text:'La nota clínica se eliminará permanentemente.',icon:'warning',showCancelButton:true,confirmButtonText:'Sí, eliminar',cancelButtonText:'Cancelar',confirmButtonColor:'#ef4444'});
+if(!result.isConfirmed)return;
+try{
+const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes/${noteId}`,{method:'DELETE'});
+const d=await r.json();
+if(d.success){renderNotes();Swal.fire({title:'🗑️ Nota eliminada',icon:'success',timer:1500,showConfirmButton:false});}
+else Swal.fire('Error',d.error||'No se pudo eliminar','error');
+}catch(e){Swal.fire('Error','No se pudo eliminar','error');}
+}
+
+function showAddGoal(){
+Swal.fire({title:'Nuevo objetivo',html:`<input id="swalGoalTitle" class="swal2-input" placeholder="Título"><input id="swalGoalMetric" class="swal2-input" placeholder="Métrica (ej: días sin ansiedad)"><input id="swalGoalTarget" class="swal2-input" type="number" placeholder="Valor objetivo"><input id="swalGoalDays" class="swal2-input" type="number" placeholder="Duración (días)">`,showCancelButton:true,confirmButtonText:'Crear',preConfirm:async()=>{
+const title=document.getElementById('swalGoalTitle').value.trim();
+const metric=document.getElementById('swalGoalMetric').value.trim();
+const target=parseInt(document.getElementById('swalGoalTarget').value);
+const days=parseInt(document.getElementById('swalGoalDays').value);
+if(!title||!metric||!target||!days){Swal.showValidationMessage('Completa todos los campos');return false;}
+await api(`${API}/therapists/patients/${currentPatientId}/goals`,{method:'POST',body:JSON.stringify({title,metric,target_value:target,duration_days:days})});
+const r=await api(`${API}/therapists/patients/${currentPatientId}`);const d=await r.json();
+if(d.success){patientData=d.patient;renderGoals();}
+}});
+}
+// ==================== BIBLIOTECA TCC ====================
+async function loadTemplates(){
+if(templates.length)return renderTemplates();
+try{
+const r=await api(`${API}/therapists/task-templates`);const d=await r.json();
+if(d.success){templates=d.templates;templateCategories=d.categories;renderTemplates();renderCategoryFilters();}
+}catch(e){document.getElementById('libraryGrid').innerHTML='<p style="text-align:center;color:var(--d);padding:40px">Error al cargar la biblioteca</p>';}
+}
+function renderCategoryFilters(){
+const container=document.getElementById('categoryFilter');
+container.innerHTML='<div class="category-chip'+(!activeCategory?' active':'')+'" onclick="filterCategory(null)">📋 Todas</div>'+
+templateCategories.map(c=>`<div class="category-chip${activeCategory===c?' active':''}" onclick="filterCategory('${c.replace(/'/g,"\\'")}')">${c}</div>`).join('');
+}
+function filterCategory(cat){activeCategory=cat;renderTemplates();renderCategoryFilters();}
+function renderTemplates(){
+const search=document.getElementById('librarySearch')?.value?.toLowerCase()||'';
+let filtered=templates;
+if(activeCategory)filtered=filtered.filter(t=>t.category===activeCategory);
+if(search)filtered=filtered.filter(t=>t.title.toLowerCase().includes(search)||t.instructions.toLowerCase().includes(search)||t.category.toLowerCase().includes(search));
+const grid=document.getElementById('libraryGrid');
+if(!filtered.length){grid.innerHTML='<p style="text-align:center;color:#888;padding:40px;grid-column:1/-1">No se encontraron tareas</p>';return;}
+grid.innerHTML=filtered.map(t=>{
+const isCustom=!!t.therapist_id;
+const cardClass=isCustom?'template-card custom-template':'template-card system-template';
+const customBadge=isCustom?'<span class="custom-badge">⭐ Tuya</span>':'';
+// Botones para plantillas propias: editar + eliminar
+// Botones para plantillas del sistema: ver instrucciones + asignar
+const actionButtons=isCustom
+?`<button class="btn btn-p btn-sm" onclick="event.stopPropagation();toggleTemplate('${t.id}')">📖 Ver</button>
+   <button class="btn btn-w btn-sm" onclick="event.stopPropagation();editCustomTemplate('${t.id}')">✏️ Editar</button>
+   <button class="btn btn-d btn-sm" onclick="event.stopPropagation();deleteCustomTemplate('${t.id}')">🗑️ Eliminar</button>
+   <button class="btn btn-s btn-sm" onclick="event.stopPropagation();assignTemplateToPatient('${t.id}')">📋 Asignar</button>`
+:`<button class="btn btn-p btn-sm" onclick="event.stopPropagation();toggleTemplate('${t.id}')">📖 Ver instrucciones</button>
+   <button class="btn btn-s btn-sm" onclick="event.stopPropagation();assignTemplateToPatient('${t.id}')">📋 Asignar a paciente</button>`;
+return`
+<div class="${cardClass}" id="tcard-${t.id}">
+<div class="template-category">${t.category}${customBadge}</div>
+<div class="template-title">${t.title}</div>
+<div class="template-meta">
+<span class="template-difficulty diff-${t.difficulty}">${t.difficulty==='baja'?'🟢 Fácil':t.difficulty==='media'?'🟡 Media':'🔴 Avanzada'}</span>
+<span class="template-duration">⏱ ${t.duration_min} min</span>
+</div>
+<div class="template-instructions">${t.instructions.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>')}</div>
+<div class="template-actions">${actionButtons}</div>
+</div>`;
+}).join('');
+}
+function toggleTemplate(id){
+const card=document.getElementById('tcard-'+id);
+card.classList.toggle('expanded');
+const btn=card.querySelector('.btn-p');
+btn.textContent=card.classList.contains('expanded')?'🔼 Ocultar':'📖 Ver instrucciones';
+}
+async function assignTemplateToPatient(templateId){
+const template=templates.find(t=>t.id===templateId);
+if(!template)return;
+// Obtener lista de pacientes
+let patients=[];
+try{const r=await api(`${API}/therapists/patients`);const d=await r.json();patients=d.patients||[];}catch(e){}
+if(!patients.length)return Swal.fire('Sin pacientes','No tienes pacientes para asignar esta tarea','info');
+const options={};
+patients.forEach(p=>{options[p.id]=p.name||'Anónimo (ID:'+p.id.slice(0,8)+')';});
+const {value:pId}=await Swal.fire({title:'Asignar a paciente',text:`Tarea: ${template.title}`,input:'select',inputOptions:options,inputPlaceholder:'Selecciona un paciente...',showCancelButton:true,confirmButtonText:'Asignar',cancelButtonText:'Cancelar'});
+if(!pId)return;
+try{
+await api(`${API}/therapists/patients/${pId}/assignments`,{method:'POST',body:JSON.stringify({type:template.category,title:template.title,instructions:template.instructions})});
+Swal.fire({title:'✅ Tarea asignada',text:`"${template.title}" asignada al paciente`,icon:'success',timer:2000,showConfirmButton:false});
+}catch(e){Swal.fire('Error','No se pudo asignar la tarea','error');}
+}
+
+// ==================== PLANTILLAS PERSONALIZADAS (CRUD) ====================
+function showCreateTemplate(){
+Swal.fire({title:'Crear nueva plantilla',html:`
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Categoría</label>
+<input id="swalTmplCat" class="swal2-input" placeholder="Ej: 🧘 Respiración guiada">
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Título</label>
+<input id="swalTmplTitle" class="swal2-input" placeholder="Título de la tarea">
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Instrucciones</label>
+<textarea id="swalTmplInstructions" class="swal2-textarea" placeholder="Instrucciones detalladas..." rows="4"></textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Dificultad</label>
+<select id="swalTmplDifficulty" class="swal2-input"><option value="baja">🟢 Fácil</option><option value="media" selected>🟡 Media</option><option value="alta">🔴 Avanzada</option></select>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Duración (minutos)</label>
+<input id="swalTmplDuration" class="swal2-input" type="number" value="30" min="5" max="180">
+`,showCancelButton:true,confirmButtonText:'Crear plantilla',cancelButtonText:'Cancelar',width:600,preConfirm:async()=>{
+const category=document.getElementById('swalTmplCat').value.trim();
+const title=document.getElementById('swalTmplTitle').value.trim();
+const instructions=document.getElementById('swalTmplInstructions').value.trim();
+const difficulty=document.getElementById('swalTmplDifficulty').value;
+const duration=parseInt(document.getElementById('swalTmplDuration').value)||30;
+if(!category||!title||!instructions){Swal.showValidationMessage('Categoría, título e instrucciones son obligatorios');return false;}
+try{
+const r=await api(`${API}/therapists/task-templates`,{method:'POST',body:JSON.stringify({category,title,instructions,difficulty,duration_min:duration})});
+const d=await r.json();
+if(d.success){templates.unshift(d.template);renderTemplates();renderCategoryFilters();Swal.fire({title:'✅ Plantilla creada',icon:'success',timer:1500,showConfirmButton:false});}
+else Swal.showValidationMessage(d.error||'Error al crear');
+}catch(e){Swal.showValidationMessage('Error de conexión');}
+}});
+}
+
+function editCustomTemplate(templateId){
+const t=templates.find(x=>x.id===templateId);
+if(!t)return;
+Swal.fire({title:'Editar plantilla',html:`
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Categoría</label>
+<input id="swalTmplCat" class="swal2-input" value="${t.category.replace(/"/g,'&quot;')}">
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Título</label>
+<input id="swalTmplTitle" class="swal2-input" value="${t.title.replace(/"/g,'&quot;')}">
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Instrucciones</label>
+<textarea id="swalTmplInstructions" class="swal2-textarea" rows="4">${t.instructions.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Dificultad</label>
+<select id="swalTmplDifficulty" class="swal2-input"><option value="baja"${t.difficulty==='baja'?' selected':''}>🟢 Fácil</option><option value="media"${t.difficulty==='media'?' selected':''}>🟡 Media</option><option value="alta"${t.difficulty==='alta'?' selected':''}>🔴 Avanzada</option></select>
+<label style="display:block;text-align:left;margin:8px 0 4px;font-weight:600">Duración (minutos)</label>
+<input id="swalTmplDuration" class="swal2-input" type="number" value="${t.duration_min}" min="5" max="180">
+`,showCancelButton:true,confirmButtonText:'Guardar cambios',cancelButtonText:'Cancelar',width:600,preConfirm:async()=>{
+const category=document.getElementById('swalTmplCat').value.trim();
+const title=document.getElementById('swalTmplTitle').value.trim();
+const instructions=document.getElementById('swalTmplInstructions').value.trim();
+const difficulty=document.getElementById('swalTmplDifficulty').value;
+const duration=parseInt(document.getElementById('swalTmplDuration').value)||30;
+if(!category||!title||!instructions){Swal.showValidationMessage('Categoría, título e instrucciones son obligatorios');return false;}
+try{
+const r=await api(`${API}/therapists/task-templates/${templateId}`,{method:'PUT',body:JSON.stringify({category,title,instructions,difficulty,duration_min:duration})});
+const d=await r.json();
+if(d.success){
+const idx=templates.findIndex(x=>x.id===templateId);
+if(idx!==-1){templates[idx]={...templates[idx],category,title,instructions,difficulty,duration_min:duration};}
+renderTemplates();renderCategoryFilters();Swal.fire({title:'✅ Plantilla actualizada',icon:'success',timer:1500,showConfirmButton:false});
+}
+else Swal.showValidationMessage(d.error||'Error al actualizar');
+}catch(e){Swal.showValidationMessage('Error de conexión');}
+}});
+}
+
+async function deleteCustomTemplate(templateId){
+const t=templates.find(x=>x.id===templateId);
+if(!t)return;
+const result=await Swal.fire({title:'¿Eliminar plantilla?',text:`"${t.title}" se eliminará permanentemente.`,icon:'warning',showCancelButton:true,confirmButtonText:'Sí, eliminar',cancelButtonText:'Cancelar',confirmButtonColor:'#ef4444'});
+if(!result.isConfirmed)return;
+try{
+const r=await api(`${API}/therapists/task-templates/${templateId}`,{method:'DELETE'});
+const d=await r.json();
+if(d.success){templates=templates.filter(x=>x.id!==templateId);renderTemplates();renderCategoryFilters();Swal.fire({title:'🗑️ Eliminada',icon:'success',timer:1500,showConfirmButton:false});}
+else Swal.fire('Error',d.error||'No se pudo eliminar','error');
+}catch(e){Swal.fire('Error','No se pudo eliminar','error');}
+}
+
+async function exportPatientData(){if(!currentPatientId)return;
+try{const r=await api(`${API}/therapists/export/${currentPatientId}?format=csv`);const blob=await r.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`coter_${currentPatientId.slice(0,8)}.csv`;a.click();URL.revokeObjectURL(url);Swal.fire({title:'✅ Exportado',icon:'success',timer:1500,showConfirmButton:false});}
+catch(e){Swal.fire('Error','No se pudo exportar','error');}}
+
+async function loadCode(){
+try{
+const r=await api(`${API}/therapists/connection-codes`);const d=await r.json();
+if(d.success&&d.codes?.length){const c=d.codes[0];document.getElementById('currentCode').innerHTML=`${c.code}<small>Expira: ${new Date(c.expires_at).toLocaleDateString('es-ES')} | Usos: ${c.uses}/${c.max_uses}</small>`;}
+else document.getElementById('currentCode').textContent='Sin códigos activos';
+}catch(e){console.error(e);}
+}
+async function generateCode(){
+const r=await api(`${API}/therapists/connection-codes`,{method:'POST',body:JSON.stringify({duration_hours:720,max_uses:5})});const d=await r.json();
+if(d.success){loadCode();Swal.fire({title:'¡Código generado!',html:`<div class="code-box" style="font-size:2rem;margin:10px 0">${d.code}</div><p style="color:#888;margin-top:12px">Comparte este código con tu paciente</p>`,icon:'success'});}
+else Swal.fire('Error',d.error||'No se pudo generar el código','error');
+}
+function showNewPatient(){
+Swal.fire({title:'Nuevo paciente',html:`<input id="swalPatientName" class="swal2-input" placeholder="Nombre y apellidos del paciente">`,showCancelButton:true,confirmButtonText:'Crear código',cancelButtonText:'Cancelar',preConfirm:async()=>{
+const name=document.getElementById('swalPatientName').value.trim();
+if(!name){Swal.showValidationMessage('Ingresa el nombre del paciente');return false;}
+try{
+const r=await api(`${API}/therapists/connection-codes`,{method:'POST',body:JSON.stringify({duration_hours:720,max_uses:1,patient_name:name})});
+const d=await r.json();
+if(d.success){loadCode();Swal.fire({title:'¡Código creado!',html:`<h3 style="margin-bottom:12px">${name}</h3><div class="code-box" style="font-size:2rem;margin:10px 0">${d.code}</div><p style="color:#888;margin-top:12px">Comparte este código exclusivo con ${name.split(' ')[0]}</p>`,icon:'success'});}
+else Swal.fire('Error',d.error||'No se pudo crear el código','error');
+}catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
+}});
+}
+
+document.querySelectorAll('.nav-item[data-tab]').forEach(el=>el.onclick=()=>{
+document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+el.classList.add('active');document.getElementById('tab-'+el.dataset.tab).classList.add('active');
+if(el.dataset.tab==='patients')loadPatients();
+if(el.dataset.tab==='code')loadCode();
+if(el.dataset.tab==='calendar')loadCalendar();
+if(el.dataset.tab==='library')loadTemplates();
+});
+document.querySelectorAll('.modal-tab').forEach(el=>el.onclick=()=>{
+document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
+document.querySelectorAll('.modal-tab-content').forEach(c=>c.classList.remove('active'));
+el.classList.add('active');document.getElementById(el.dataset.ptab).classList.add('active');
+});
+
+// ==================== CALENDARIO ====================
+let calendarYear,calendarMonth,calendarData={};
+function initCalendar(){
+const now=new Date();calendarYear=now.getFullYear();calendarMonth=now.getMonth();
+}
+function loadCalendar(){
+if(!calendarYear)initCalendar();
+const monthStr=`${calendarYear}-${String(calendarMonth+1).padStart(2,'0')}`;
+document.getElementById('calendarMonthLabel').textContent=
+new Date(calendarYear,calendarMonth).toLocaleDateString('es-ES',{month:'long',year:'numeric'});
+api(`${API}/therapists/calendar?month=${monthStr}`).then(r=>r.json()).then(d=>{
+if(d.success){calendarData=d.dates||{};renderCalendar();}
+}).catch(e=>{document.getElementById('calendarGrid').innerHTML='<p style="text-align:center;color:var(--d);padding:40px;grid-column:1/-1">Error al cargar calendario</p>';});
+}
+function prevMonth(){calendarMonth--;if(calendarMonth<0){calendarMonth=11;calendarYear--;}loadCalendar();document.getElementById('calendarDayPanel').classList.add('hidden');}
+function nextMonth(){calendarMonth++;if(calendarMonth>11){calendarMonth=0;calendarYear++;}loadCalendar();document.getElementById('calendarDayPanel').classList.add('hidden');}
+function goToToday(){initCalendar();loadCalendar();document.getElementById('calendarDayPanel').classList.add('hidden');}
+
+function renderCalendar(){
+const grid=document.getElementById('calendarGrid');
+const todayStr=new Date().toISOString().slice(0,10);
+const today=new Date();today.setHours(0,0,0,0);
+const firstDay=new Date(calendarYear,calendarMonth,1);
+const lastDay=new Date(calendarYear,calendarMonth+1,0);
+const startOffset=(firstDay.getDay()+6)%7; // Lunes=0
+const totalDays=lastDay.getDate();
+const dayNames=['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+
+let html=dayNames.map(d=>`<div class="calendar-day-header">${d}</div>`).join('');
+
+// Días vacíos del mes anterior
+for(let i=0;i<startOffset;i++){
+html+=`<div class="calendar-day other-month"><div class="calendar-day-num"></div></div>`;
+}
+
+// Días del mes
+for(let d=1;d<=totalDays;d++){
+const dateStr=`${calendarYear}-${String(calendarMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+const dayData=calendarData[dateStr]||{checkins:[],tasks:[]};
+const checkins=dayData.checkins||[];
+const tasks=dayData.tasks||[];
+
+const dateObj=new Date(calendarYear,calendarMonth,d);dateObj.setHours(0,0,0,0);
+const isToday=dateObj.getTime()===today.getTime();
+
+// Dots de colores
+let dots='';
+const avgMood=checkins.length?Math.round(checkins.reduce((s,c)=>s+c.mood,0)/checkins.length):null;
+if(avgMood!==null){
+const moodClass=avgMood>=7?'mood-high':avgMood>=4?'mood-mid':'mood-low';
+dots+=`<div class="calendar-dot ${moodClass}" title="Ánimo prom: ${avgMood}/10"></div>`;
+}
+// Comparación de fechas con strings (evita bugs de zona horaria)
+const overdueTasks=tasks.filter(t=>t.due_date&&t.due_date.slice(0,10)<todayStr);
+const dueTasks=tasks.filter(t=>t.due_date&&t.due_date.slice(0,10)>=todayStr);
+if(overdueTasks.length)dots+=`<div class="calendar-dot task-overdue" title="${overdueTasks.length} vencidas"></div>`;
+if(dueTasks.length)dots+=`<div class="calendar-dot task-due" title="${dueTasks.length} tareas"></div>`;
+
+html+=`<div class="calendar-day${isToday?' today':''}" onclick="selectCalendarDay('${dateStr}')">
+<div class="calendar-day-num">${d}</div>
+<div class="calendar-dots">${dots}</div>
+</div>`;
+}
+
+// Días vacíos del mes siguiente
+const remaining=42-(startOffset+totalDays);
+for(let i=0;i<remaining&&i<14;i++){
+html+=`<div class="calendar-day other-month"><div class="calendar-day-num"></div></div>`;
+}
+
+grid.innerHTML=html;
+}
+
+function selectCalendarDay(dateStr){
+// Marcar día seleccionado
+document.querySelectorAll('.calendar-day.selected').forEach(el=>el.classList.remove('selected'));
+document.querySelectorAll('.calendar-day').forEach(el=>{
+const num=el.querySelector('.calendar-day-num')?.textContent;
+if(num&&`${calendarYear}-${String(calendarMonth+1).padStart(2,'0')}-${String(parseInt(num)).padStart(2,'0')}`===dateStr)el.classList.add('selected');
+});
+
+const panel=document.getElementById('calendarDayPanel');
+const dayData=calendarData[dateStr]||{checkins:[],tasks:[]};
+const checkins=dayData.checkins||[];
+const tasks=dayData.tasks||[];
+
+const dateLabel=new Date(dateStr+'T00:00:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+document.getElementById('calendarDayTitle').textContent=dateLabel;
+
+let html='';
+// Check-ins
+html+=`<h4>🌤️ Check-ins (${checkins.length})</h4>`;
+if(!checkins.length)html+='<div class="calendar-empty">Sin check-ins este día</div>';
+else html+=checkins.map(c=>`<div class="calendar-event checkin"><span style="font-size:1.3rem">${c.mood<=3?'😔':c.mood>=7?'😊':'😐'}</span><div><strong>${c.patient_name}</strong> — Ánimo ${c.mood}/10 | Ansiedad ${c.anxiety}/10 | Energía ${c.energy||'-'}/10</div></div>`).join('');
+
+// Tareas
+html+=`<h4>📋 Tareas (${tasks.length})</h4>`;
+if(!tasks.length)html+='<div class="calendar-empty">Sin tareas este día</div>';
+else html+=tasks.map(t=>{  const isOverdue=t.due_date&&t.due_date.slice(0,10)<new Date().toISOString().slice(0,10);
+const cls=isOverdue?'task-overdue-cal':'task-item-cal';
+const badge=t.status==='completed'?'✅':isOverdue?'⚠️ Vencida':t.due_date?'⏳ Pendiente':'📌 Asignada';
+return`<div class="calendar-event ${cls}"><span style="font-size:1.2rem">${isOverdue?'⚠️':'📋'}</span><div><strong>${t.title}</strong> <span style="font-size:.75rem;color:#888">${badge}</span><br><small>${t.patient_name}${t.due_date?` · Vence: ${new Date(t.due_date).toLocaleDateString('es-ES')}`:''}</small></div></div>`;
+}).join('');
+
+document.getElementById('calendarDayContent').innerHTML=html;
+panel.classList.remove('hidden');
+}
+
+const saved=localStorage.getItem('coter_therapist');
+if(saved){try{const s=JSON.parse(saved);token=s.token;therapist=s.therapist;showApp();}catch(e){localStorage.removeItem('coter_therapist');}}
+</script>
+</body>
+</html>

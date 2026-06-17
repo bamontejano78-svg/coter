@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Coter Pro</string>
+    <string name="title_activity_main">Coter Pro</string>
+    <string name="package_name">com.coter.pro</string>
+    <string name="custom_url_scheme">com.coter.pro</string>
+</resources>
