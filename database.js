@@ -17,12 +17,21 @@ function createPool() {
     );
   }
 
+  // Debug: loggear detalles de conexión SIN la contraseña
+  try {
+    const url = new URL(config.DATABASE_URL);
+    logger.info('Conectando a PostgreSQL: ' + url.host + '/' + url.pathname.replace('/', '') + ' como ' + url.username);
+  } catch (e) {
+    logger.info('Conectando a PostgreSQL (URL no parseable para debug)');
+  }
+
   pool = new Pool({
     connectionString: config.DATABASE_URL,
     min: config.DB_POOL_MIN,
     max: config.DB_POOL_MAX,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: 15000,
+    ssl: config.DATABASE_URL.includes('neon.tech') ? { rejectUnauthorized: false } : undefined,
   });
 
   pool.on('error', (err) => {

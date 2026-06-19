@@ -1,4 +1,8 @@
-require('dotenv-flow').config({ silent: true });
+// En producción (Railway, etc.), las variables vienen del entorno real.
+// Solo cargar dotenv-flow en desarrollo. En prod, process.env ya tiene los valores.
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv-flow').config({ silent: true });
+}
 
 const logger = require('./logger');
 
