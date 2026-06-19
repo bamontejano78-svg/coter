@@ -3,6 +3,8 @@ const { v4: uuidv4 } = require('uuid');
 const { getPool } = require('../database');
 const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
 const { checkTaskReminders } = require('../utils/notifications');
+const { authenticatePatient } = require('../middleware/auth');
+const { audit, auditAccess, auditChange } = require('../utils/audit');
 const logger = require('../config/logger');
 
 const router = express.Router();
@@ -26,11 +28,12 @@ router.post('/connect', async (req, res) => {
     const codeData = codeRows[0];
     const patientId = uuidv4();
     const patientName = codeData.patient_name || null;
+    const authToken = uuidv4(); // Token de autenticación para el paciente
 
     const insertSql = patientName
-      ? "INSERT INTO patients (id, name, status) VALUES ($1, $2, 'active')"
-      : "INSERT INTO patients (id, status) VALUES ($1, 'active')";
-    const insertParams = patientName ? [patientId, patientName] : [patientId];
+      ? "INSERT INTO patients (id, name, status, auth_token) VALUES ($1, $2, 'active', $3)"
+      : "INSERT INTO patients (id, status, auth_token) VALUES ($1, 'active', $2)";
+    const insertParams = patientName ? [patientId, patientName, authToken] : [patientId, authToken];
     await pool.query(insertSql, insertParams);
 
     const linkId = uuidv4();
@@ -41,9 +44,12 @@ router.post('/connect', async (req, res) => {
 
     await pool.query('UPDATE connection_codes SET uses = uses + 1 WHERE id = $1', [codeData.id]);
 
+    audit({ who: patientId, role: 'patient', action: 'connect', resource: 'patient', resourceId: patientId, ip: req.ip, metadata: { therapistId: codeData.therapist_id, code: connection_code } });
+
     res.json({
       success: true,
       patient_id: patientId,
+      auth_token: authToken,
       therapist: { id: codeData.therapist_id, name: codeData.therapist_name, specialty: codeData.specialty },
       connection_code,
       connected_at: new Date().toISOString(),
@@ -53,6 +59,9 @@ router.post('/connect', async (req, res) => {
     res.status(500).json({ error: 'Error al conectar' });
   }
 });
+
+// ─── Middleware de auth para todas las rutas con :patientId ────
+router.use('/:patientId', authenticatePatient);
 
 // ─── CHECK-INS ───────────────────────────────────────────────
 router.post('/:patientId/check-ins', async (req, res) => {
@@ -67,6 +76,7 @@ router.post('/:patientId/check-ins', async (req, res) => {
       'INSERT INTO check_ins (id, patient_id, mood, anxiety, energy, thoughts) VALUES ($1, $2, $3, $4, $5, $6)',
       [id, patientId, mood, anxiety, energy || 5, encrypt(thoughts || '')]
     );
+    audit({ who: patientId, role: 'patient', action: 'create_checkin', resource: 'check_in', resourceId: id, ip: req.ip, metadata: { mood, anxiety, energy } });
     res.json({ success: true, check_in_id: id, message: 'Check-in guardado' });
   } catch (err) {
     logger.error('Error guardando check-in', { error: err.message });
@@ -78,11 +88,20 @@ router.get('/:patientId/check-ins', async (req, res) => {
   try {
     const { patientId } = req.params;
     const pool = getPool();
+    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const offset = parseInt(req.query.offset) || 0;
+
     const { rows } = await pool.query(
-      'SELECT * FROM check_ins WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 30',
+      'SELECT * FROM check_ins WHERE patient_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+      [patientId, limit, offset]
+    );
+
+    const { rows: countRows } = await pool.query(
+      'SELECT COUNT(*) as total FROM check_ins WHERE patient_id = $1',
       [patientId]
     );
-    res.json({ success: true, check_ins: decryptCheckIns(rows) });
+
+    res.json({ success: true, check_ins: decryptCheckIns(rows), pagination: { limit, offset, total: parseInt(countRows[0].total) } });
   } catch (err) {
     logger.error('Error cargando check-ins', { error: err.message });
     res.status(500).json({ error: 'Error al cargar' });
@@ -94,11 +113,20 @@ router.get('/:patientId/messages', async (req, res) => {
   try {
     const { patientId } = req.params;
     const pool = getPool();
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
+
     const { rows } = await pool.query(
-      'SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 50',
+      'SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+      [patientId, limit, offset]
+    );
+
+    const { rows: countRows } = await pool.query(
+      'SELECT COUNT(*) as total FROM messages WHERE patient_id = $1',
       [patientId]
     );
-    res.json({ success: true, messages: decryptMessages(rows) });
+
+    res.json({ success: true, messages: decryptMessages(rows), pagination: { limit, offset, total: parseInt(countRows[0].total) } });
   } catch (err) {
     logger.error('Error cargando mensajes', { error: err.message });
     res.status(500).json({ error: 'Error al cargar' });
@@ -123,6 +151,7 @@ router.post('/:patientId/messages', async (req, res) => {
       'INSERT INTO messages (id, therapist_id, patient_id, message, is_therapist) VALUES ($1, $2, $3, $4, FALSE)',
       [messageId, connRows[0].therapist_id, patientId, encrypt(message)]
     );
+    audit({ who: patientId, role: 'patient', action: 'send_message', resource: 'message', resourceId: messageId, ip: req.ip });
     res.json({ success: true, message_id: messageId, message: 'Mensaje enviado' });
   } catch (err) {
     logger.error('Error enviando mensaje', { error: err.message });
@@ -296,12 +325,21 @@ router.get('/:patientId/notifications', async (req, res) => {
     const { patientId } = req.params;
     const pool = getPool();
     checkTaskReminders(pool, patientId);
+    const limit = Math.min(parseInt(req.query.limit) || 30, 100);
+    const offset = parseInt(req.query.offset) || 0;
+
     const { rows } = await pool.query(
-      'SELECT * FROM notifications WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 30',
+      'SELECT * FROM notifications WHERE patient_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+      [patientId, limit, offset]
+    );
+
+    const { rows: countRows } = await pool.query(
+      'SELECT COUNT(*) as total FROM notifications WHERE patient_id = $1',
       [patientId]
     );
+
     const unreadCount = rows.filter(n => !n.is_read).length;
-    res.json({ success: true, notifications: rows, unread_count: unreadCount });
+    res.json({ success: true, notifications: rows, unread_count: unreadCount, pagination: { limit, offset, total: parseInt(countRows[0].total) } });
   } catch (err) {
     logger.error('Error notificaciones', { error: err.message });
     res.status(500).json({ success: false });

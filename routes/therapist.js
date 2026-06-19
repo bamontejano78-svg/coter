@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 const { body, query, param, validationResult } = require('express-validator');
 const { getPool } = require('../database');
 const { authenticateToken } = require('../middleware/auth');
@@ -10,6 +11,54 @@ const config = require('../config/env');
 const logger = require('../config/logger');
 const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
 const { createNotification } = require('../utils/notifications');
+const { audit, auditAccess, auditChange } = require('../utils/audit');
+
+// ─── Email transporter (lazy init) ──────────────────────────────
+let mailTransporter = null;
+function getMailTransporter() {
+  if (mailTransporter) return mailTransporter;
+  if (!config.SMTP_HOST || !config.SMTP_USER || !config.SMTP_PASS) {
+    logger.warn('SMTP no configurado — emails no se enviarán');
+    return null;
+  }
+  mailTransporter = nodemailer.createTransport({
+    host: config.SMTP_HOST,
+    port: config.SMTP_PORT,
+    secure: config.SMTP_PORT === 465,
+    auth: { user: config.SMTP_USER, pass: config.SMTP_PASS },
+  });
+  logger.info('Transporte de email configurado: ' + config.SMTP_HOST);
+  
+  // Verificar conexión SMTP (asíncrono, no bloquea el arranque)
+  mailTransporter.verify((err) => {
+    if (err) logger.error('Error verificando SMTP: ' + err.message);
+    else logger.info('SMTP verificado correctamente');
+  });
+  
+  return mailTransporter;
+}
+
+async function sendRecoveryEmail(email, therapistName, resetToken, resetUrl) {
+  const transporter = getMailTransporter();
+  if (!transporter) {
+    logger.warn('No se pudo enviar email de recuperación — SMTP no configurado');
+    return false;
+  }
+  try {
+    await transporter.sendMail({
+      from: '"Coter Pro" <' + config.SMTP_FROM + '>',
+      to: email,
+      subject: 'Recuperación de contraseña — Coter Pro',
+      text: 'Hola ' + therapistName + ',\n\nHas solicitado restablecer tu contraseña en Coter Pro.\n\nUsa el siguiente enlace para crear una nueva contraseña (válido por 1 hora):\n' + resetUrl + '\n\nO copia este código: ' + resetToken + '\n\nSi no solicitaste este cambio, ignora este mensaje.\n\n— El equipo de Coter Pro',
+      html: '<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px"><h2 style="color:#6366f1">🧠 Coter Pro</h2><p>Hola <strong>' + therapistName + '</strong>,</p><p>Has solicitado restablecer tu contraseña.</p><p style="text-align:center;margin:30px 0"><a href="' + resetUrl + '" style="background:#6366f1;color:#fff;padding:14px 32px;border-radius:10px;text-decoration:none;font-weight:700;font-size:16px">Restablecer contraseña</a></p><p style="color:#888;font-size:14px">O copia este código: <strong>' + resetToken + '</strong></p><p style="color:#888;font-size:14px">Válido por 1 hora. Si no solicitaste esto, ignora este mensaje.</p></div>',
+    });
+    logger.info('Email de recuperación enviado a ' + email);
+    return true;
+  } catch (err) {
+    logger.error('Error enviando email de recuperación', { error: err.message, email });
+    return false;
+  }
+}
 
 const router = express.Router();
 
@@ -21,6 +70,74 @@ const generateConnectionCode = () => {
   for (let i = 0; i < 6; i++) code += chars.charAt(bytes[i] % chars.length);
   return code;
 };
+
+// ─── Refresh Token Helpers ────────────────────────────────────
+const REFRESH_TOKEN_BYTES = 48; // 96 caracteres hex
+
+function generateRefreshToken() {
+  return crypto.randomBytes(REFRESH_TOKEN_BYTES).toString('hex');
+}
+
+async function createRefreshToken(pool, therapistId) {
+  const token = generateRefreshToken();
+  const family = uuidv4(); // agrupa tokens de la misma sesión
+  const expiresAt = new Date(Date.now() + config.REFRESH_TOKEN_DAYS * 86400000);
+  await pool.query(
+    'INSERT INTO refresh_tokens (id, therapist_id, token, family, expires_at) VALUES ($1, $2, $3, $4, $5)',
+    [uuidv4(), therapistId, token, family, expiresAt]
+  );
+  return token;
+}
+
+async function rotateRefreshToken(pool, oldToken, therapistId) {
+  // Buscar el token sin filtrar por revoked (para distinguir los 3 casos)
+  const { rows } = await pool.query(
+    'SELECT family, revoked, expires_at FROM refresh_tokens WHERE token = $1 AND therapist_id = $2',
+    [oldToken, therapistId]
+  );
+
+  // Caso 1: Token nunca existió — rechazar sin revocar nada
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const row = rows[0];
+
+  // Caso 2: Token ya fue revocado (posible replay/robo) — revocar toda la familia
+  if (row.revoked) {
+    logger.warn('Posible robo de refresh token (replay detectado)', { therapistId });
+    await pool.query('UPDATE refresh_tokens SET revoked = TRUE WHERE family = $1', [row.family]);
+    return null;
+  }
+
+  // Caso 3: Token expirado — rechazar sin revocar (legítimo)
+  if (new Date(row.expires_at) <= new Date()) {
+    return null;
+  }
+
+  // Caso 4: Token válido — rotación normal
+  const family = row.family;
+
+  // Revocar el token usado
+  await pool.query('UPDATE refresh_tokens SET revoked = TRUE WHERE token = $1', [oldToken]);
+
+  // Generar nuevo token en la misma familia
+  const newToken = generateRefreshToken();
+  const expiresAt = new Date(Date.now() + config.REFRESH_TOKEN_DAYS * 86400000);
+  await pool.query(
+    'INSERT INTO refresh_tokens (id, therapist_id, token, family, expires_at) VALUES ($1, $2, $3, $4, $5)',
+    [uuidv4(), therapistId, newToken, family, expiresAt]
+  );
+
+  return newToken;
+}
+
+async function revokeAllRefreshTokens(pool, therapistId) {
+  await pool.query(
+    'UPDATE refresh_tokens SET revoked = TRUE WHERE therapist_id = $1 AND revoked = FALSE',
+    [therapistId]
+  );
+}
 
 // Helper: validar campos
 const validate = (req, res, next) => {
@@ -55,8 +172,10 @@ router.post('/register', [
     );
 
     const token = jwt.sign({ id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
+    const refreshToken = await createRefreshToken(pool, id);
     logger.info('Terapeuta registrado', { id, email });
-    res.json({ success: true, therapist: { id, name, email, specialty }, token });
+    audit({ who: id, role: 'therapist', action: 'register', resource: 'therapist', resourceId: id, ip: req.ip, metadata: { email, name, specialty } });
+    res.json({ success: true, therapist: { id, name, email, specialty }, token, refresh_token: refreshToken });
   } catch (err) {
     logger.error('Error en registro', { error: err.message });
     res.status(500).json({ success: false, error: 'Error del servidor' });
@@ -84,13 +203,72 @@ router.post('/login', [
     }
 
     const token = jwt.sign({ id: therapist.id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
+    const refreshToken = await createRefreshToken(pool, therapist.id);
+    audit({ who: therapist.id, role: 'therapist', action: 'login', resource: 'therapist', resourceId: therapist.id, ip: req.ip });
     res.json({
       success: true,
       therapist: { id: therapist.id, name: therapist.name, email: therapist.email, specialty: therapist.specialty },
       token,
+      refresh_token: refreshToken,
     });
   } catch (err) {
     logger.error('Error en login', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor' });
+  }
+});
+
+// ─── REFRESH TOKEN ────────────────────────────────────────────
+router.post('/refresh-token', [
+  body('refresh_token').notEmpty().withMessage('Refresh token requerido'),
+], validate, async (req, res) => {
+  try {
+    const { refresh_token } = req.body;
+    const pool = getPool();
+
+    // Buscar el refresh token
+    const { rows } = await pool.query(
+      'SELECT rt.*, t.id as tid FROM refresh_tokens rt JOIN therapists t ON t.id = rt.therapist_id WHERE rt.token = $1 AND rt.revoked = FALSE AND rt.expires_at > NOW()',
+      [refresh_token]
+    );
+
+    if (rows.length === 0) {
+      return res.status(401).json({ success: false, error: 'Refresh token invalido o expirado' });
+    }
+
+    const therapistId = rows[0].therapist_id;
+
+    // Rotar: invalidar el viejo, generar uno nuevo
+    const newRefreshToken = await rotateRefreshToken(pool, refresh_token, therapistId);
+    if (!newRefreshToken) {
+      return res.status(401).json({ success: false, error: 'Refresh token invalido, expirado o ya utilizado' });
+    }
+
+    // Emitir nuevo access token
+    const newAccessToken = jwt.sign({ id: therapistId }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
+
+    audit({ who: therapistId, role: 'therapist', action: 'refresh_token', resource: 'refresh_token', resourceId: therapistId, ip: req.ip });
+
+    res.json({
+      success: true,
+      token: newAccessToken,
+      refresh_token: newRefreshToken,
+    });
+  } catch (err) {
+    logger.error('Error en refresh token', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor' });
+  }
+});
+
+// ─── LOGOUT (revocar refresh tokens) ──────────────────────────
+router.post('/logout', authenticateToken, async (req, res) => {
+  try {
+    const pool = getPool();
+    await revokeAllRefreshTokens(pool, req.user.id);
+    logger.info('Sesiones cerradas para terapeuta', { id: req.user.id });
+    audit({ who: req.user.id, role: 'therapist', action: 'logout', resource: 'therapist', resourceId: req.user.id, ip: req.ip });
+    res.json({ success: true, message: 'Sesion cerrada' });
+  } catch (err) {
+    logger.error('Error en logout', { error: err.message });
     res.status(500).json({ success: false, error: 'Error del servidor' });
   }
 });
@@ -138,16 +316,30 @@ router.get('/connection-codes', authenticateToken, async (req, res) => {
 router.get('/patients', authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const offset = parseInt(req.query.offset) || 0;
+
     const { rows } = await pool.query(
       `SELECT p.id, p.name, p.email, p.phone, p.status, p.created_at, tp.connection_code, tp.connected_at,
         (SELECT mood FROM check_ins WHERE patient_id = p.id ORDER BY created_at DESC LIMIT 1) as last_mood,
         (SELECT anxiety FROM check_ins WHERE patient_id = p.id ORDER BY created_at DESC LIMIT 1) as last_anxiety,
         (SELECT created_at FROM check_ins WHERE patient_id = p.id ORDER BY created_at DESC LIMIT 1) as last_checkin
       FROM patients p JOIN therapist_patients tp ON tp.patient_id = p.id
-      WHERE tp.therapist_id = $1 AND tp.status = 'active' ORDER BY tp.connected_at DESC`,
+      WHERE tp.therapist_id = $1 AND tp.status = 'active' ORDER BY tp.connected_at DESC
+      LIMIT $2 OFFSET $3`,
+      [req.user.id, limit, offset]
+    );
+
+    const { rows: countRows } = await pool.query(
+      "SELECT COUNT(*) as total FROM therapist_patients WHERE therapist_id = $1 AND status = 'active'",
       [req.user.id]
     );
-    res.json({ success: true, patients: rows });
+
+    res.json({
+      success: true,
+      patients: rows,
+      pagination: { limit, offset, total: parseInt(countRows[0].total) },
+    });
   } catch (err) {
     logger.error('Error cargando pacientes', { error: err.message });
     res.status(500).json({ success: false });
@@ -187,6 +379,8 @@ router.get('/patients/:patientId', authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
     const { patientId } = req.params;
+    const limitCheckins = Math.min(parseInt(req.query.limit_checkins) || 50, 100);
+    const limitMessages = Math.min(parseInt(req.query.limit_messages) || 100, 200);
 
     const { rows: connRows } = await pool.query(
       "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
@@ -194,11 +388,13 @@ router.get('/patients/:patientId', authenticateToken, async (req, res) => {
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
 
+    auditAccess(req, 'view_patient', patientId);
+
     const { rows: patientRows } = await pool.query('SELECT * FROM patients WHERE id = $1', [patientId]);
     if (patientRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
 
-    const { rows: checkIns } = await pool.query('SELECT * FROM check_ins WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 50', [patientId]);
-    const { rows: messages } = await pool.query('SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 100', [patientId]);
+    const { rows: checkIns } = await pool.query('SELECT * FROM check_ins WHERE patient_id = $1 ORDER BY created_at DESC LIMIT $2', [patientId, limitCheckins]);
+    const { rows: messages } = await pool.query('SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at DESC LIMIT $2', [patientId, limitMessages]);
     const { rows: assignments } = await pool.query('SELECT * FROM assignments WHERE patient_id = $1 ORDER BY created_at DESC', [patientId]);
     const { rows: goals } = await pool.query('SELECT * FROM goals WHERE patient_id = $1 ORDER BY created_at DESC', [patientId]);
 
@@ -234,6 +430,7 @@ router.post('/patients/:patientId/messages', authenticateToken, async (req, res)
     const preview = message.trim().length > 80 ? message.trim().substring(0, 80) + '...' : message.trim();
     createNotification(pool, patientId, 'message', 'Nuevo mensaje de tu terapeuta', preview, msgId);
 
+    auditChange(req, 'send_message', 'message', msgId, { patientId });
     res.json({ success: true, message_id: msgId });
   } catch (err) {
     logger.error('Error enviando mensaje', { error: err.message });
@@ -254,6 +451,8 @@ router.post('/patients/:patientId/assignments', authenticateToken, async (req, r
       'INSERT INTO assignments (id, therapist_id, patient_id, type, title, instructions, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7)',
       [assignId, req.user.id, patientId, type, title, encrypt(instructions), due_date || null]
     );
+
+    auditChange(req, 'create_assignment', 'assignment', assignId, { patientId, type, title });
 
     const dueMsg = due_date ? ' (vence: ' + new Date(due_date).toLocaleDateString('es-ES') + ')' : '';
     createNotification(pool, patientId, 'assignment', 'Nueva tarea asignada', '"' + title + '"' + dueMsg, assignId);
@@ -296,6 +495,7 @@ router.post('/patients/:patientId/goals', authenticateToken, async (req, res) =>
       [goalId, patientId, title, metric, target_value, duration_days]
     );
 
+    auditChange(req, 'create_goal', 'goal', goalId, { patientId, title, metric, target_value });
     createNotification(pool, patientId, 'goal', 'Nuevo objetivo', '"' + title + '" - Meta: ' + target_value + ' (' + duration_days + ' dias)', goalId);
     res.json({ success: true, goal_id: goalId });
   } catch (err) {
@@ -421,6 +621,7 @@ router.post('/patients/:patientId/clinical-notes', authenticateToken, async (req
       [id, patientId, req.user.id, subjective || null, objective || null, assessment || null, plan || null]
     );
     const { rows: noteRows } = await pool.query('SELECT * FROM clinical_notes WHERE id = $1', [id]);
+    auditChange(req, 'create_clinical_note', 'clinical_note', id, { patientId });
     res.json({ success: true, note: noteRows[0] });
   } catch (err) {
     logger.error('Error creando nota', { error: err.message });
@@ -450,6 +651,7 @@ router.put('/patients/:patientId/clinical-notes/:noteId', authenticateToken, asy
       "UPDATE clinical_notes SET subjective=$1, objective=$2, assessment=$3, plan=$4, updated_at=NOW() WHERE id=$5 AND therapist_id=$6",
       [fields.subjective, fields.objective, fields.assessment, fields.plan, noteId, req.user.id]
     );
+    auditChange(req, 'update_clinical_note', 'clinical_note', noteId, { patientId });
     res.json({ success: true, note: { ...note, ...fields, updated_at: new Date().toISOString() } });
   } catch (err) {
     logger.error('Error actualizando nota', { error: err.message });
@@ -468,6 +670,7 @@ router.delete('/patients/:patientId/clinical-notes/:noteId', authenticateToken, 
     if (noteRows.length === 0) return res.status(404).json({ success: false, error: 'Nota no encontrada' });
 
     await pool.query('DELETE FROM clinical_notes WHERE id = $1 AND therapist_id = $2', [noteId, req.user.id]);
+    auditChange(req, 'delete_clinical_note', 'clinical_note', noteId, { patientId });
     res.json({ success: true, message: 'Nota eliminada' });
   } catch (err) {
     logger.error('Error eliminando nota', { error: err.message });
@@ -591,6 +794,7 @@ router.get('/export/:patientId', authenticateToken, async (req, res) => {
       return res.send(csv);
     }
     const patient = patientRows[0];
+    auditChange(req, 'export_patient_data', 'patient', patientId, { format });
     res.json({ export_date: new Date().toISOString(), patient, check_ins: decryptedCheckIns, messages: decryptedMessages, assignments: decryptedAssignments, goals });
   } catch (err) {
     logger.error('Error exportando', { error: err.message });
@@ -615,15 +819,13 @@ router.post('/password-recovery', [
       [uuidv4(), therapist.id, resetToken, new Date(Date.now() + 3600000).toISOString()]
     );
 
-    // En desarrollo: loguear el token
-    if (!config.isProd) {
-      logger.info('Password reset token para ' + email + ': ' + resetToken);
-    }
+    // Enviar email de recuperación
+    const resetUrl = config.APP_URL + '/reset-password?token=' + resetToken;
+    const emailSent = await sendRecoveryEmail(email, therapist.name, resetToken, resetUrl);
 
-    // TODO: Enviar email real con el token
-    if (config.SMTP_HOST && config.SMTP_USER && config.SMTP_PASS) {
-      logger.info('Email de recuperacion enviado a ' + email);
-      // Aqui se integraria nodemailer
+    if (!config.isProd && !emailSent) {
+      logger.info('Password reset token para ' + email + ': ' + resetToken);
+      logger.info('URL: ' + resetUrl);
     }
 
     res.json({ success: true, message: 'Si el email existe, recibiras instrucciones' });
@@ -649,6 +851,7 @@ router.post('/reset-password', [
     const hash = await bcrypt.hash(new_password, 10);
     await pool.query("UPDATE therapists SET password = $1, updated_at = NOW() WHERE id = $2", [hash, resetRows[0].therapist_id]);
     await pool.query('UPDATE password_resets SET used = TRUE WHERE id = $1', [resetRows[0].id]);
+    audit({ who: resetRows[0].therapist_id, role: 'therapist', action: 'password_reset', resource: 'therapist', resourceId: resetRows[0].therapist_id, ip: req.ip });
     res.json({ success: true, message: 'Contrasena actualizada' });
   } catch (err) {
     logger.error('Error reseteando password', { error: err.message });

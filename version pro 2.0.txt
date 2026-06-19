@@ -1,0 +1,291 @@
+Actúa como un equipo experto compuesto por Product Manager de SaaS sanitario, arquitecto de software, diseñador UX, experto en IA generativa y especialista en privacidad sanitaria.
+
+Diseña un módulo llamado "Copiloto Terapéutico IA" para una plataforma ya existente de gestión entre terapeutas y pacientes.
+
+## Contexto de la plataforma actual
+
+La plataforma ya dispone de:
+
+- Perfil completo del paciente.
+- Historial terapéutico.
+- Sistema de tareas y ejercicios.
+- Seguimiento del cumplimiento de tareas.
+- Mensajería segura entre paciente y terapeuta.
+- Cuestionarios de evaluación y métricas de evolución (si existen).
+- Agenda y sesiones (si existen).
+
+El objetivo NO es crear únicamente un generador de notas clínicas, sino una inteligencia de continuidad terapéutica que ayude al profesional antes, durante y después de cada sesión.
+
+Principio fundamental:
+
+"La IA sugiere, organiza y detecta patrones. Nunca sustituye el criterio clínico del terapeuta."
+
+---
+
+# Objetivo del producto
+
+Crear un copiloto capaz de:
+
+- Recordar el historial completo del paciente.
+- Preparar al terapeuta antes de una sesión.
+- Escuchar y analizar sesiones con consentimiento.
+- Generar documentación clínica.
+- Detectar cambios y patrones a lo largo del tiempo.
+- Proponer tareas terapéuticas.
+- Ayudar en la planificación de próximas sesiones.
+- Permitir consultar el historial mediante lenguaje natural.
+
+---
+
+# Módulo 1 — Briefing inteligente antes de la sesión
+
+Diseñar una pantalla "Preparación de sesión" que muestre automáticamente:
+
+## Resumen rápido (30 segundos)
+
+- Motivo principal del tratamiento.
+- Objetivos terapéuticos activos.
+- Número de sesiones realizadas.
+- Temas recurrentes.
+- Cambios desde la última sesión.
+- Eventos importantes recientes.
+- Estado de tareas asignadas.
+- Mensajes relevantes del paciente.
+- Resultados recientes de cuestionarios.
+
+La IA debe generar además:
+
+- Preguntas sugeridas para explorar.
+- Áreas que han quedado pendientes.
+- Hipótesis terapéuticas formuladas con lenguaje prudente.
+- Posibles objetivos de la sesión actual.
+
+---
+
+# Módulo 2 — Asistente durante la sesión
+
+Con consentimiento registrado:
+
+Permitir:
+
+- Iniciar, pausar y finalizar grabación.
+- Marcadores manuales de momentos importantes.
+- Notas rápidas del terapeuta.
+- Registro seguro del consentimiento.
+
+La IA puede identificar en segundo plano:
+
+- Nuevos temas relevantes.
+- Eventos vitales.
+- Objetivos mencionados.
+- Acuerdos alcanzados.
+- Posibles tareas propuestas.
+
+No debe interrumpir ni dirigir la sesión en tiempo real.
+
+---
+
+# Módulo 3 — Procesamiento post-sesión
+
+Al finalizar la sesión generar:
+
+## Resumen ejecutivo
+
+Incluir:
+
+- Temas tratados.
+- Estado emocional expresado.
+- Cambios percibidos respecto a sesiones anteriores.
+- Dificultades actuales.
+- Avances.
+- Acuerdos realizados.
+
+## Nota clínica
+
+Permitir formatos:
+
+- SOAP.
+- DAP.
+- BIRP.
+- Plantillas personalizadas.
+
+El terapeuta debe revisar y editar antes de guardar.
+
+---
+
+# Módulo 4 — Generador inteligente de tareas
+
+Analizar:
+
+- Conversación de la sesión.
+- Objetivos terapéuticos.
+- Historial de tareas.
+- Nivel de adherencia del paciente.
+
+Proponer tareas con:
+
+- Título.
+- Descripción.
+- Objetivo terapéutico.
+- Duración o frecuencia.
+- Instrucciones para el paciente.
+
+El terapeuta podrá:
+
+- Aprobar.
+- Modificar.
+- Rechazar.
+
+Solo tras aprobación se enviarán al paciente.
+
+---
+
+# Módulo 5 — Memoria longitudinal del tratamiento
+
+Diseñar un motor de memoria capaz de analizar:
+
+- Todas las sesiones anteriores.
+- Transcripciones.
+- Notas clínicas.
+- Mensajes.
+- Tareas realizadas.
+- Cuestionarios.
+- Objetivos del tratamiento.
+
+Debe detectar:
+
+- Temas recurrentes.
+- Cambios de evolución.
+- Mejoras sostenidas.
+- Obstáculos repetitivos.
+- Eventos desencadenantes.
+- Riesgo de abandono.
+
+Ejemplos:
+
+"El conflicto con la familia aparece en 8 de las últimas 12 sesiones."
+
+"La adherencia a ejercicios de exposición ha aumentado progresivamente."
+
+---
+
+# Módulo 6 — Chat con el historial del paciente
+
+Crear un asistente conversacional privado donde el terapeuta pueda preguntar:
+
+- Resume la evolución de este paciente.
+- ¿Qué temas se repiten con más frecuencia?
+- ¿Qué tareas han tenido mejores resultados?
+- ¿Qué quedó pendiente en la última sesión?
+- Prepara una propuesta para la próxima sesión.
+
+El sistema debe citar siempre las fuentes de la información:
+- Sesión.
+- Fecha.
+- Nota.
+- Mensaje.
+- Cuestionario.
+
+---
+
+# Módulo 7 — Adaptación al modelo terapéutico
+
+Permitir configurar el enfoque del terapeuta:
+
+- TCC.
+- ACT.
+- Sistémico.
+- Psicodinámico.
+- EMDR.
+- Integrativo.
+
+La IA debe adaptar el lenguaje y el tipo de sugerencias a cada orientación.
+
+---
+
+# Módulo 8 — Alertas inteligentes
+
+Generar alertas como:
+
+- Baja adherencia a tareas.
+- Ausencia de progreso durante múltiples sesiones.
+- Aparición recurrente de un problema.
+- Cambios importantes en cuestionarios.
+- Preparación de revisión del plan terapéutico.
+
+Las alertas deben ser informativas y configurables.
+
+---
+
+# Módulo 9 — Privacidad y seguridad
+
+Diseñar bajo GDPR y normativa sanitaria aplicable:
+
+- Consentimiento explícito.
+- Cifrado de datos.
+- Control de permisos.
+- Registro de auditoría.
+- Política de retención de audio.
+- Posibilidad de eliminar grabaciones.
+- Separación entre audio, transcripción y análisis IA.
+
+---
+
+# Módulo 10 — Arquitectura técnica
+
+Proponer:
+
+- Arquitectura frontend y backend.
+- Modelo de datos.
+- Base de datos.
+- Sistema de almacenamiento de audio.
+- Pipeline de IA.
+- Transcripción.
+- Modelos LLM.
+- Sistema de memoria semántica.
+- RAG sobre historial del paciente.
+- Vector database.
+- Procesamiento asíncrono.
+- Sistema de permisos.
+
+---
+
+# Módulo 11 — Diseño UX
+
+Diseñar las pantallas:
+
+1. Dashboard del Copiloto.
+2. Preparación automática de sesión.
+3. Grabación de sesión.
+4. Procesamiento y análisis.
+5. Informe post-sesión.
+6. Chat con historial.
+7. Línea temporal de evolución.
+8. Centro de alertas.
+
+Crear wireframes conceptuales y flujos de navegación.
+
+---
+
+# Módulo 12 — Estrategia de desarrollo
+
+Definir un roadmap dividido en:
+
+## MVP (máximo valor con mínima complejidad)
+
+## Versión 2 (ventajas competitivas)
+
+## Versión 3 (copiloto avanzado)
+
+Para cada fase indicar:
+- Funcionalidades.
+- Complejidad técnica.
+- Riesgos.
+- Tiempo estimado.
+- Recursos necesarios.
+
+---
+
+# Resultado esperado
+
+Entregar un documento completo de especificación de producto (PRD), arquitectura técnica, diseño UX, modelo de datos, APIs, estrategia de IA, roadmap de desarrollo y análisis de riesgos.

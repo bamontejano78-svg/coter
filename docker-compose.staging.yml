@@ -1,0 +1,89 @@
+version: '3.8'
+
+# ═══════════════════════════════════════════════════════════════
+# Coter Pro — Entorno de Staging
+# Uso: docker compose -f docker-compose.staging.yml up -d
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  # ─── PostgreSQL ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: coter-staging-db
+    environment:
+      POSTGRES_DB: coter_staging
+      POSTGRES_USER: coter
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-coter_staging_dev}
+    ports:
+      - '5432:5432'
+    volumes:
+      - staging_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U coter -d coter_staging']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - coter-staging
+
+  # ─── API ───────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coter-staging-api
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: staging
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://coter:${DB_PASSWORD:-coter_staging_dev}@postgres:5432/coter_staging
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost,http://localhost:8080,http://localhost:3000}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      APP_URL: ${APP_URL:-https://localhost}
+      LOG_LEVEL: debug
+      REFRESH_TOKEN_DAYS: 30
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - coter-staging
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ─── Nginx (HTTPS + static files) ──────────────────────
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+      args:
+        ENV: staging
+    container_name: coter-staging-nginx
+    ports:
+      - '80:80'
+      - '443:443'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - coter-staging
+
+volumes:
+  staging_pgdata:
+
+networks:
+  coter-staging:
+    driver: bridge

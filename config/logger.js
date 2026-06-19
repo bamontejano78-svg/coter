@@ -2,15 +2,21 @@ const winston = require('winston');
 const path = require('path');
 const fs = require('fs');
 
-// Crear directorio de logs si no existe
-const logsDir = path.join(__dirname, '..', 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
-
 const isProd = (process.env.NODE_ENV || 'development') === 'production';
 const isTest = (process.env.NODE_ENV || 'development') === 'test';
 const logLevel = process.env.LOG_LEVEL || (isProd ? 'info' : 'debug');
+
+// Detectar si estamos en Docker (stdout es suficiente)
+const isDocker = fs.existsSync('/.dockerenv') || process.env.DOCKER_CONTAINER === 'true';
+
+// Crear directorio de logs si no existe (solo fuera de Docker)
+let logsDir = null;
+if (!isDocker && !isTest) {
+  logsDir = path.join(__dirname, '..', 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+}
 
 // Formateador personalizado
 const customFormat = winston.format.combine(
@@ -40,7 +46,7 @@ const consoleFormat = winston.format.combine(
 
 const transports = [];
 
-// En tests, solo loguear a consola con nivel error
+// Siempre loguear a consola
 if (isTest) {
   transports.push(
     new winston.transports.Console({
@@ -49,7 +55,6 @@ if (isTest) {
     })
   );
 } else {
-  // Consola: siempre
   transports.push(
     new winston.transports.Console({
       format: consoleFormat,
@@ -57,24 +62,25 @@ if (isTest) {
     })
   );
 
-  // Archivo: errores
-  transports.push(
-    new winston.transports.File({
-      filename: path.join(logsDir, 'error.log'),
-      level: 'error',
-      maxsize: 5 * 1024 * 1024, // 5 MB
-      maxFiles: 5,
-    })
-  );
+  // Archivos solo fuera de Docker y fuera de test
+  if (!isDocker && logsDir) {
+    transports.push(
+      new winston.transports.File({
+        filename: path.join(logsDir, 'error.log'),
+        level: 'error',
+        maxsize: 5 * 1024 * 1024, // 5 MB
+        maxFiles: 5,
+      })
+    );
 
-  // Archivo: todos los logs
-  transports.push(
-    new winston.transports.File({
-      filename: path.join(logsDir, 'combined.log'),
-      maxsize: 10 * 1024 * 1024, // 10 MB
-      maxFiles: 10,
-    })
-  );
+    transports.push(
+      new winston.transports.File({
+        filename: path.join(logsDir, 'combined.log'),
+        maxsize: 10 * 1024 * 1024, // 10 MB
+        maxFiles: 10,
+      })
+    );
+  }
 }
 
 const logger = winston.createLogger({

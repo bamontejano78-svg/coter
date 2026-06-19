@@ -4,101 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Coter – Tu compañero terapéutico</title>
-<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<style>
-:root{--p:#6366f1;--s:#10b981;--w:#f59e0b;--d:#ef4444;--g:#f8fafc;--t:#1e293b;--b:#e2e8f0}
-*{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',system-ui,sans-serif}
-body{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;min-height:100vh;padding:20px}
-.container{max-width:480px;margin:0 auto}
-.card{background:#fff;border-radius:20px;padding:28px;margin-bottom:20px;box-shadow:0 20px 50px rgba(0,0,0,.2);color:var(--t)}
-h1{font-size:2.4rem;font-weight:900;text-align:center;margin-bottom:4px}
-h2{font-size:1.3rem;font-weight:700;color:var(--p);margin:20px 0 14px}
-.connect-screen{text-align:center;padding:60px 40px}
-.connect-screen .code-input{width:100%;padding:20px;font-size:1.5rem;text-align:center;text-transform:uppercase;letter-spacing:6px;border:2px solid rgba(255,255,255,.3);border-radius:16px;background:rgba(255,255,255,.15);color:#fff;font-weight:700;margin:28px 0}
-.connect-screen .code-input::placeholder{color:rgba(255,255,255,.5)}
-.therapist-info{text-align:center;padding:20px;background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(139,92,246,.08));border-radius:14px;margin-bottom:20px}
-.therapist-name{font-size:1.3rem;font-weight:700;color:var(--p)}
-.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0}
-.stat-item{background:#f8fafc;padding:16px 8px;border-radius:12px;text-align:center}
-.stat-num{font-size:1.8rem;font-weight:800;color:var(--p)}
-.stat-label{font-size:.75rem;color:#64748b;margin-top:2px}
-.slider-container{margin:16px 0}
-.slider-label{display:flex;justify-content:space-between;align-items:center;font-weight:600;margin-bottom:8px}
-.slider-value{font-size:1.1rem;font-weight:800;color:var(--p)}
-input[type="range"]{width:100%;height:8px;border-radius:4px;background:#e2e8f0;outline:none;-webkit-appearance:none}
-input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:32px;height:32px;border-radius:50%;background:var(--p);cursor:pointer;box-shadow:0 4px 14px rgba(99,102,241,.3)}
-textarea{width:100%;padding:14px;border:2px solid #e2e8f0;border-radius:14px;min-height:100px;font-family:inherit;font-size:.95rem;margin:12px 0;line-height:1.5;resize:vertical}
-textarea:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 3px rgba(99,102,241,.1)}
-.btn{width:100%;padding:14px 20px;border:none;border-radius:14px;color:#fff;font-size:1rem;font-weight:700;cursor:pointer;transition:.2s;margin:6px 0}
-.btn:hover{transform:translateY(-2px);box-shadow:0 10px 25px rgba(0,0,0,.15)}
-.btn-p{background:var(--p)}
-.btn-s{background:var(--s)}
-.btn-w{background:var(--w);color:#333}
-.btn-d{background:var(--d)}
-.chat-box{height:320px;overflow-y:auto;background:#f8fafc;border-radius:14px;padding:16px;margin:16px 0;border:1px solid #e2e8f0}
-.msg{padding:14px 18px;border-radius:18px;margin:10px 0;max-width:85%;word-wrap:break-word;box-shadow:0 2px 8px rgba(0,0,0,.06)}
-.msg.therapist{background:linear-gradient(135deg,#e0e7ff,#c7d2fe);align-self:flex-start}
-.msg.patient{background:linear-gradient(135deg,#dcfce7,#bbf7d0);align-self:flex-end;margin-left:auto}
-.msg-time{font-size:.75rem;color:#64748b;margin-top:6px}
-.chat-input{display:flex;gap:10px}
-.chat-input input{flex:1;padding:14px;border-radius:14px;border:2px solid #e2e8f0;font-size:.95rem}
-.task-item{padding:16px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:14px;margin:12px 0;border-left:5px solid var(--w)}
-.task-title{font-size:1.1rem;font-weight:700;margin-bottom:6px}
-.task-instructions{font-size:.9rem;line-height:1.5;margin-bottom:10px}
-.goal-item{padding:16px;background:#f0fdf4;border-radius:14px;margin:12px 0;border-left:5px solid var(--s)}
-.progress-bar{height:8px;background:#e2e8f0;border-radius:4px;margin-top:8px;overflow:hidden}
-.progress-fill{height:100%;background:var(--s);border-radius:4px;transition:.3s}
-.technique-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.technique-btn{padding:24px 16px;border:none;border-radius:16px;cursor:pointer;text-align:center;font-weight:700;transition:.2s;color:#fff;font-size:.95rem}
-.technique-btn:hover{transform:translateY(-3px)}
-.technique-breath{background:linear-gradient(135deg,#6366f1,#818cf8)}
-.technique-mind{background:linear-gradient(135deg,#8b5cf6,#a78bfa)}
-.technique-ground{background:linear-gradient(135deg,#10b981,#34d399)}
-.technique-gratitude{background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#333}
-.hidden{display:none!important}
-.toast{position:fixed;top:20px;right:20px;background:var(--s);color:#fff;padding:14px 22px;border-radius:14px;box-shadow:0 10px 30px rgba(16,185,129,.3);z-index:1000;transform:translateX(400px);transition:.3s}
-.toast.show{transform:translateX(0)}
-.toast.error{background:var(--d);box-shadow:0 10px 30px rgba(239,68,68,.3)}
-.notif-bar{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.15);border-radius:16px;padding:8px 20px;cursor:pointer;position:relative;transition:.2s}
-.notif-bar:hover{background:rgba(255,255,255,.25)}
-.notif-bell{font-size:1.8rem;line-height:1}
-.notif-badge{position:absolute;top:-4px;right:-4px;background:var(--d);color:#fff;font-size:.7rem;font-weight:800;min-width:20px;height:20px;border-radius:10px;display:flex;align-items:center;justify-content:center;padding:0 5px;box-shadow:0 2px 8px rgba(239,68,68,.4)}
-.notif-panel{background:#fff;border-radius:20px;padding:0;margin-bottom:20px;box-shadow:0 20px 50px rgba(0,0,0,.2);color:var(--t);overflow:hidden;display:none}
-.notif-panel.show{display:block}
-.notif-header{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--b)}
-.notif-header h2{font-size:1.2rem;font-weight:700;color:var(--t);margin:0}
-.notif-list{max-height:380px;overflow-y:auto}
-.notif-item{padding:16px 22px;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:.2s;display:flex;gap:12px;align-items:flex-start}
-.notif-item:hover{background:#f8fafc}
-.notif-item.unread{background:#eef2ff}
-.notif-item.unread:hover{background:#e0e7ff}
-.notif-icon{font-size:1.4rem;flex-shrink:0;margin-top:2px}
-.notif-content{flex:1}
-.notif-title{font-weight:700;font-size:.92rem;margin-bottom:2px}
-.notif-message{font-size:.82rem;color:#64748b;line-height:1.4}
-.notif-time{font-size:.7rem;color:#94a3b8;margin-top:4px}
-.notif-empty{text-align:center;padding:30px;color:#888}
-.task-overdue{border-left-color:var(--d)!important;background:linear-gradient(135deg,#fee2e2,#fecaca)!important}
-.task-due-today{border-left-color:var(--w)!important;}
-.progress-achievements{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}
-.progress-badge{background:linear-gradient(135deg,#eef2ff,#e0e7ff);border-radius:12px;padding:14px 8px;text-align:center}
-.progress-badge-value{font-size:1.5rem;font-weight:800;color:var(--p)}
-.progress-badge-label{font-size:.7rem;color:#64748b;margin-top:2px}
-.progress-weekly{display:flex;gap:6px;margin:12px 0;overflow-x:auto}
-.progress-week{flex:1;min-width:70px;background:#f8fafc;border-radius:10px;padding:10px 6px;text-align:center}
-.progress-week-label{font-size:.7rem;color:#94a3b8;margin-bottom:4px}
-.progress-week-arrow{font-size:.85rem}
-.progress-week-arrow.up{color:#10b981}
-.progress-week-arrow.down{color:#ef4444}
-.progress-week-arrow.neutral{color:#94a3b8}
-.progress-note{padding:14px;background:linear-gradient(135deg,#f5f3ff,#ede9fe);border-radius:12px;margin:12px 0;border-left:4px solid #8b5cf6;font-size:.88rem;line-height:1.5;color:#475569}
-.progress-note-label{font-size:.7rem;font-weight:700;color:#8b5cf6;text-transform:uppercase;margin-bottom:4px}
-.progress-timeline{margin:12px 0}
-.progress-timeline-item{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:.85rem}
-.progress-timeline-icon{font-size:1.1rem;flex-shrink:0}
-.progress-timeline-date{font-size:.7rem;color:#94a3b8;margin-left:auto}
-</style>
+<script src="/lib/sweetalert2.all.min.js"></script>
+<script src="/lib/chart.umd.min.js"></script>
+<link rel="stylesheet" href="/css/patient.css">
 </head>
 <body>
 
@@ -108,7 +16,7 @@ textarea:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 3px rgba(99,1
 <h1>🧠 Coter</h1>
 <p style="font-size:1.1rem;opacity:.9;margin:20px 0 32px">Tu compañero terapéutico digital</p>
 <input type="text" class="code-input" id="codeInput" placeholder="TH-ABC123" maxlength="8" autocomplete="off">
-<button class="btn btn-p" onclick="connect()">Conectar con mi terapeuta</button>
+<button class="btn btn-p" data-action="connect">Conectar con mi terapeuta</button>
 <p style="margin-top:24px;font-size:.9rem;opacity:.7">Pide el código de acceso a tu terapeuta</p>
 </div>
 
@@ -118,7 +26,7 @@ textarea:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 3px rgba(99,1
 <div class="therapist-name" id="therapistName">Cargando...</div>
 <div style="font-size:.9rem;opacity:.7;margin-top:4px">Tu terapeuta está contigo</div>
 <div style="display:flex;justify-content:center;margin-top:12px">
-<div class="notif-bar" onclick="toggleNotifications()">
+<div class="notif-bar" data-action="toggle-notifications">
 <span class="notif-bell">🔔</span>
 <span class="notif-badge hidden" id="notifBadge">0</span>
 </div>
@@ -128,7 +36,7 @@ textarea:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 3px rgba(99,1
 <div class="notif-panel" id="notifPanel">
 <div class="notif-header">
 <h2>🔔 Notificaciones</h2>
-<button class="btn btn-p" style="width:auto;padding:6px 16px;font-size:.8rem" onclick="markAllRead()">✓ Leer todas</button>
+<button class="btn btn-p" style="width:auto;padding:6px 16px;font-size:.8rem" data-action="mark-all-read">✓ Leer todas</button>
 </div>
 <div class="notif-list" id="notifList">
 <div class="notif-empty">Cargando...</div>
@@ -158,18 +66,18 @@ textarea:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 3px rgba(99,1
 <h2>🌤️ ¿Cómo te sientes hoy?</h2>
 <div class="slider-container">
 <div class="slider-label"><span>😊 Ánimo</span><span class="slider-value" id="moodVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="mood" oninput="updateSlider('mood')">
+<input type="range" min="1" max="10" value="5" id="mood" data-slider="mood">
 </div>
 <div class="slider-container">
 <div class="slider-label"><span>😰 Ansiedad</span><span class="slider-value" id="anxietyVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="anxiety" oninput="updateSlider('anxiety')">
+<input type="range" min="1" max="10" value="5" id="anxiety" data-slider="anxiety">
 </div>
 <div class="slider-container">
 <div class="slider-label"><span>⚡ Energía</span><span class="slider-value" id="energyVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="energy" oninput="updateSlider('energy')">
+<input type="range" min="1" max="10" value="5" id="energy" data-slider="energy">
 </div>
 <textarea id="thoughts" placeholder="¿Quieres contarle algo especial a tu terapeuta hoy?"></textarea>
-<button class="btn btn-s" onclick="sendCheckin()">✉️ Enviar check-in</button>
+<button class="btn btn-s" data-action="send-checkin">✉️ Enviar check-in</button>
 </div>
 
 <div class="card">
@@ -181,8 +89,8 @@ textarea:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 3px rgba(99,1
 <h2>💬 Chat con tu terapeuta</h2>
 <div class="chat-box" id="chatBox">Conectando...</div>
 <div class="chat-input">
-<input type="text" id="msgInput" placeholder="Escribe un mensaje..." onkeypress="if(event.key==='Enter')sendMessage()">
-<button class="btn btn-p" onclick="sendMessage()" style="width:auto;padding:14px 24px">Enviar</button>
+<input type="text" id="msgInput" placeholder="Escribe un mensaje..." >
+<button class="btn btn-p" data-action="send-message" style="width:auto;padding:14px 24px">Enviar</button>
 </div>
 </div>
 
@@ -199,338 +107,19 @@ textarea:focus{border-color:var(--p);outline:none;box-shadow:0 0 0 3px rgba(99,1
 <div class="card">
 <h2>🧘 Técnicas de relajación</h2>
 <div class="technique-grid">
-<button class="technique-btn technique-breath" onclick="startTechnique('breath')">🫁 Respiración<br><small>4-7-8</small></button>
-<button class="technique-btn technique-mind" onclick="startTechnique('mindfulness')">🧠 Mindfulness<br><small>5 min</small></button>
-<button class="technique-btn technique-ground" onclick="startTechnique('grounding')">🌍 Grounding<br><small>5-4-3-2-1</small></button>
-<button class="technique-btn technique-gratitude" onclick="startTechnique('gratitude')">🙏 Gratitud<br><small>3 cosas</small></button>
+<button class="technique-btn technique-breath" data-action="technique" data-technique="breath">🫁 Respiración<br><small>4-7-8</small></button>
+<button class="technique-btn technique-mind" data-action="technique" data-technique="mindfulness">🧠 Mindfulness<br><small>5 min</small></button>
+<button class="technique-btn technique-ground" data-action="technique" data-technique="grounding">🌍 Grounding<br><small>5-4-3-2-1</small></button>
+<button class="technique-btn technique-gratitude" data-action="technique" data-technique="gratitude">🙏 Gratitud<br><small>3 cosas</small></button>
 </div>
 </div>
 
-<button class="btn btn-d" onclick="disconnect()">Desconectar</button>
+<button class="btn btn-d" data-action="disconnect">Desconectar</button>
 </div>
 </div>
 
 <div class="toast hidden" id="toast"><span id="toastText"></span></div>
 
-<script>
-// URL de API: usa ruta relativa para funcionar en cualquier dominio
-const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-const API = isLocal
-  ? 'http://localhost:3000/api/v1'
-  : '/api/v1';
-let patientId=null,patientData=null,moodChart=null;
-
-const saved=localStorage.getItem('patientConnection');
-if(saved){try{patientData=JSON.parse(saved);patientId=patientData.patient_id;showMainScreen();loadEverything();}catch(e){localStorage.removeItem('patientConnection');}}
-
-function updateSlider(id){document.getElementById(id+'Val').textContent=document.getElementById(id).value;}
-
-async function connect(){
-const code=document.getElementById('codeInput').value.trim().toUpperCase();
-if(!code)return toastMsg('Ingresa el código de acceso','error');
-try{
-const r=await fetch(`${API}/patients/connect`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_code:code})});
-const d=await r.json();
-if(d.success){patientData=d;patientId=d.patient_id;localStorage.setItem('patientConnection',JSON.stringify(d));showMainScreen();loadEverything();toastMsg(`¡Conectado con ${d.therapist.name}!`);}
-else toastMsg(d.error||'Código inválido','error');
-}catch(e){toastMsg('Error de conexión con el servidor','error');}
-}
-
-function showMainScreen(){
-document.getElementById('connectScreen').classList.add('hidden');
-document.getElementById('mainScreen').classList.remove('hidden');
-document.getElementById('therapistName').textContent=patientData.therapist.name;
-}
-
-async function loadEverything(){
-loadMessages();loadTasks();loadGoals();loadStats();loadNotifications();loadProgress();
-setInterval(loadMessages,4000);
-setInterval(loadStats,30000);
-setInterval(loadNotifications,15000);
-setInterval(loadProgress,60000);
-}
-
-async function sendCheckin(){
-const payload={mood:+document.getElementById('mood').value,anxiety:+document.getElementById('anxiety').value,energy:+document.getElementById('energy').value,thoughts:document.getElementById('thoughts').value};
-await fetch(`${API}/patients/${patientId}/check-ins`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-toastMsg('✅ Check-in enviado a tu terapeuta');
-document.getElementById('thoughts').value='';
-loadStats();loadMessages();
-}
-
-async function loadMessages(){
-try{
-const r=await fetch(`${API}/patients/${patientId}/messages`);const d=await r.json();
-const box=document.getElementById('chatBox');
-const msgs=(d.messages||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
-if(!msgs.length){box.innerHTML='<div style="text-align:center;color:#888;padding:30px">¡Escribe el primer mensaje! ✍️</div>';return;}
-box.innerHTML=msgs.map(m=>`<div class="msg ${m.is_therapist?'therapist':'patient'}"><strong>${m.is_therapist?patientData.therapist.name:'Tú'}</strong><div style="margin-top:4px">${m.message}</div><div class="msg-time">${new Date(m.created_at).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</div></div>`).join('');
-box.scrollTop=box.scrollHeight;
-}catch(e){}
-}
-async function sendMessage(){
-const input=document.getElementById('msgInput');const msg=input.value.trim();
-if(!msg)return;
-await fetch(`${API}/patients/${patientId}/messages`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})});
-input.value='';loadMessages();
-}
-
-async function loadTasks(){
-try{
-const r=await fetch(`${API}/patients/${patientId}/assignments`);const d=await r.json();
-const list=document.getElementById('tasksList');
-if(!d.assignments?.length){list.innerHTML='<div style="text-align:center;color:#888;padding:20px">No tienes tareas pendientes 🎉</div>';return;}
-const now=new Date();
-list.innerHTML=d.assignments.map(t=>{
-let dueClass='',dueLabel='';
-if(t.due_date){
-const due=new Date(t.due_date);
-const hoursLeft=(due-now)/(1000*60*60);
-if(hoursLeft<0){dueClass='task-overdue';dueLabel=`<div style="font-size:.85rem;color:#991b1b;font-weight:700;margin-bottom:6px">⚠️ ¡VENCIDA! ${due.toLocaleDateString('es-ES')}</div>`;}
-else if(hoursLeft<=24){dueClass='task-due-today';dueLabel=`<div style="font-size:.85rem;color:#92400e;font-weight:600;margin-bottom:6px">⏰ Vence hoy: ${due.toLocaleDateString('es-ES')}</div>`;}
-else{dueLabel=`<div style="font-size:.85rem;color:#92400e;margin-bottom:6px">📅 Vence: ${due.toLocaleDateString('es-ES')}</div>`;}
-}
-return`<div class="task-item ${dueClass}"><div class="task-title">${t.title}</div><div class="task-instructions">${t.instructions}</div>${dueLabel}<button class="btn btn-s" style="width:auto;padding:8px 20px;font-size:.85rem" onclick="completeTask('${t.id}')">✅ Marcar completada</button></div>`;
-}).join('');
-}catch(e){}
-}
-async function completeTask(id){
-await fetch(`${API}/patients/${patientId}/assignments/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({completed:true})});
-toastMsg('🎉 ¡Tarea completada!');
-loadTasks();loadStats();
-}
-
-async function loadGoals(){
-try{
-const r=await fetch(`${API}/patients/${patientId}/goals`);const d=await r.json();
-const list=document.getElementById('goalsList');
-if(!d.goals?.length){list.innerHTML='<div style="text-align:center;color:#888;padding:20px">Sin objetivos definidos</div>';return;}
-list.innerHTML=d.goals.map(g=>{const pct=Math.min(100,Math.round((g.current_value/g.target_value)*100));return`<div class="goal-item"><strong>${g.title}</strong><br><small>${g.metric}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></div>`;}).join('');
-}catch(e){}
-}
-
-async function loadStats(){
-try{
-const r=await fetch(`${API}/patients/${patientId}/check-ins`);const d=await r.json();
-const checkIns=d.check_ins||[];
-document.getElementById('streakDays').textContent=calcStreak(checkIns);
-if(checkIns.length){const recent=checkIns.slice(0,7);document.getElementById('avgMood').textContent=(recent.reduce((s,c)=>s+c.mood,0)/recent.length).toFixed(1);}
-const tr=await fetch(`${API}/patients/${patientId}/assignments`);const td=await tr.json();
-document.getElementById('tasksDone').textContent=(td.assignments||[]).filter(t=>t.status==='completed').length;
-updateMoodChart(checkIns);
-}catch(e){}
-}
-function calcStreak(checkIns){
-let streak=0;const sorted=[...checkIns].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
-const today=new Date();today.setHours(0,0,0,0);
-for(let i=0;i<sorted.length;i++){const d=new Date(sorted[i].created_at);d.setHours(0,0,0,0);const exp=new Date(today);exp.setDate(exp.getDate()-streak);if(d.getTime()===exp.getTime())streak++;else if(d.getTime()<exp.getTime())break;}
-return streak;
-}
-function updateMoodChart(checkIns){
-const ctx=document.getElementById('moodChart');if(moodChart)moodChart.destroy();
-if(!checkIns.length)return;
-const data=[...checkIns].sort((a,b)=>new Date(a.created_at)-new Date(b.created_at)).slice(-14);
-moodChart=new Chart(ctx,{type:'line',data:{labels:data.map(c=>new Date(c.created_at).toLocaleDateString('es-ES',{day:'numeric',month:'short'})),datasets:[
-{label:'Ánimo',data:data.map(c=>c.mood),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.1)',tension:.4,fill:true},
-{label:'Ansiedad',data:data.map(c=>c.anxiety),borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.1)',tension:.4,fill:true}
-]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{min:1,max:10}}}});
-}
-
-function startTechnique(type){
-const techniques={
-breath:{title:'🫁 Respiración 4-7-8',html:`<div style="text-align:center;font-size:1.2rem"><p>Inhala por la nariz durante <b>4 segundos</b></p><p>Mantén la respiración <b>7 segundos</b></p><p>Exhala lentamente por la boca durante <b>8 segundos</b></p><br><div style="font-size:3rem" id="breathCount">4</div><p style="margin-top:8px;color:#888">Repite 4 ciclos</p></div>`,timer:120},
-mindfulness:{title:'🧠 Mindfulness 5 min',html:`<div style="text-align:center;font-size:1.2rem"><p>Siéntate cómodamente y cierra los ojos</p><p>Concéntrate en tu <b>respiración natural</b></p><p>Nota cómo el aire entra y sale</p><p>Si tu mente divaga, vuelve suavemente a la respiración</p><br><div style="font-size:2.5rem" id="mindTimer">5:00</div></div>`,timer:300},
-grounding:{title:'🌍 Grounding 5-4-3-2-1',html:`<div style="text-align:center;font-size:1.2rem"><p>Mira a tu alrededor y nombra:</p><p><b>5</b> cosas que puedes VER</p><p><b>4</b> cosas que puedes TOCAR</p><p><b>3</b> sonidos que puedes OÍR</p><p><b>2</b> olores que puedes OLER</p><p><b>1</b> sabor que puedes SABOREAR</p></div>`,timer:180},
-gratitude:{title:'🙏 Gratitud',html:`<div style="text-align:center;font-size:1.2rem"><p>Piensa en <b>3 cosas</b> por las que estás agradecid@ hoy</p><p>Pueden ser grandes o pequeñas</p><p>Escríbelas mentalmente con detalle</p><br><p style="color:#888">Tómate tu tiempo para sentir la gratitud</p></div>`,timer:120}
-};
-const t=techniques[type];
-Swal.fire({title:t.title,html:t.html,timer:t.timer*1000,timerProgressBar:true,showConfirmButton:true,confirmButtonText:'Terminar',confirmButtonColor:'#6366f1',
-didOpen:()=>{if(type==='breath'){let phase=0,count=4;const phases=[4,7,8];const labels=['Inhala','Mantén','Exhala'];const el=document.getElementById('breathCount');const iv=setInterval(()=>{el.textContent=count;el.style.color=count<=4?'#6366f1':count<=7?'#8b5cf6':'#10b981';count--;if(count<0){phase=(phase+1)%3;count=phases[phase];}},1000);Swal.getTimerLeft();}
-if(type==='mindfulness'){const el=document.getElementById('mindTimer');const iv=setInterval(()=>{const left=Math.ceil(Swal.getTimerLeft()/1000);const m=Math.floor(left/60);const s=left%60;el.textContent=`${m}:${s.toString().padStart(2,'0')}`;if(left<=0)clearInterval(iv);},1000);}
-},willClose:()=>toastMsg(`✅ ${t.title.split(' ').slice(0,2).join(' ')} completada`)});
-}
-
-function disconnect(){if(confirm('¿Desconectarte de tu terapeuta?')){localStorage.removeItem('patientConnection');location.reload();}}
-
-async function loadProgress(){
-try{
-const r=await fetch(`${API}/patients/${patientId}/progress`);const d=await r.json();
-if(!d.success)return;
-const p=d.progress;
-
-// Logros
-const ach=document.getElementById('progressAchievements');
-const badges=ach.querySelectorAll('.progress-badge-value');
-badges[0].textContent=p.achievements.streakDays||0;
-badges[1].textContent=p.achievements.totalCheckins||0;
-badges[2].textContent=`${p.achievements.completedTasks||0}/${p.achievements.totalTasks||0}`;
-badges[3].textContent=`${p.achievements.completedGoals||0}/${p.achievements.totalGoals||0}`;
-
-// Tendencias semanales
-const weekly=document.getElementById('progressWeekly');
-if(!p.weeklyTrends?.length){weekly.innerHTML='<p style="text-align:center;color:#888;font-size:.85rem;padding:10px">Sin datos aún</p>';}
-else{
-weekly.innerHTML=p.weeklyTrends.map((w,i)=>{
-  const prev=p.weeklyTrends[i+1];
-  let arrow='',arrowClass='neutral';
-  if(prev&&prev.avg_mood){
-    const diff=w.avg_mood-prev.avg_mood;
-    if(diff>=0.4){arrow='↑';arrowClass='up';}
-    else if(diff<=-0.4){arrow='↓';arrowClass='down';}
-    else{arrow='→';}
-  }
-  return`<div class="progress-week">
-    <div class="progress-week-label">${w.week.replace('Esta','')||'Actual'}</div>
-    <div class="progress-week-arrow ${arrowClass}">${arrow} ${w.avg_mood}</div>
-    <div style="font-size:.65rem;color:#94a3b8">${w.count} check-ins</div>
-  </div>`;
-}).join('');
-}
-
-// Nota clínica (resumen)
-const noteDiv=document.getElementById('progressNote');
-if(p.latestNote){
-  noteDiv.classList.remove('hidden');
-  noteDiv.innerHTML=`<div class="progress-note-label">📝 Resumen de tu terapeuta</div><div>"${p.latestNote.excerpt}"</div><div style="font-size:.7rem;color:#94a3b8;margin-top:6px">${new Date(p.latestNote.date).toLocaleDateString('es-ES')} · ${p.totalNotes||0} nota(s) clínica(s)</div>`;
-}else{noteDiv.classList.add('hidden');}
-
-// Timeline
-const tl=document.getElementById('progressTimeline');
-if(!p.timeline?.length){tl.innerHTML='';return;}
-tl.innerHTML=p.timeline.map(t=>{
-  const iconMap={checkin:'🌤️',task_done:'✅',goal_done:'🎯'};
-  const icon=iconMap[t.type]||'📌';
-  const date=new Date(t.date);
-  const timeStr=date.toLocaleDateString('es-ES')===new Date().toLocaleDateString('es-ES')
-    ?date.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
-    :date.toLocaleDateString('es-ES',{day:'numeric',month:'short'});
-  return`<div class="progress-timeline-item"><span class="progress-timeline-icon">${icon}</span><span>${t.summary}</span><span class="progress-timeline-date">${timeStr}</span></div>`;
-}).join('');
-}catch(e){console.error('Progress error:',e);}
-}
-function toastMsg(text,type='success'){
-try{
-const r=await fetch(`${API}/patients/${patientId}/notifications`);const d=await r.json();
-if(!d.success)return;
-const badge=document.getElementById('notifBadge');
-const count=d.unread_count||0;
-if(count>0){badge.textContent=count>99?'99+':count;badge.classList.remove('hidden');}
-else{badge.classList.add('hidden');}
-renderNotifications(d.notifications||[]);
-}catch(e){}
-}
-
-function renderNotifications(notifs){
-const list=document.getElementById('notifList');
-if(!notifs.length){list.innerHTML='<div class="notif-empty">🔔 No tienes notificaciones</div>';return;}
-list.innerHTML=notifs.map(n=>{
-const iconMap={assignment:'📋',message:'💬',reminder:'⏰',overdue:'⚠️',goal:'🎯',system:'ℹ️'};
-const icon=iconMap[n.type]||'📌';
-const time=new Date(n.created_at);
-const timeStr=time.toLocaleDateString('es-ES')==new Date().toLocaleDateString('es-ES')
-?time.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
-:time.toLocaleDateString('es-ES',{day:'numeric',month:'short'});
-return`
-<div class="notif-item${n.is_read?'':' unread'}" onclick="markNotificationRead('${n.id}', this)">
-<div class="notif-icon">${icon}</div>
-<div class="notif-content">
-<div class="notif-title">${n.title}</div>
-<div class="notif-message">${n.message}</div>
-<div class="notif-time">${timeStr}</div>
-</div>
-</div>`;
-}).join('');
-}
-
-function toggleNotifications(){
-const panel=document.getElementById('notifPanel');
-panel.classList.toggle('show');
-if(panel.classList.contains('show'))loadNotifications();
-}
-
-async function markNotificationRead(id, el){
-try{
-await fetch(`${API}/patients/${patientId}/notifications/${id}/read`,{method:'PUT'});
-el.classList.remove('unread');
-// Actualizar badge
-const badge=document.getElementById('notifBadge');
-let count=parseInt(badge.textContent)||0;
-count=Math.max(0,count-1);
-if(count>0){badge.textContent=count>99?'99+':count;}
-else{badge.classList.add('hidden');}
-}catch(e){}
-}
-
-async function markAllRead(){
-try{
-await fetch(`${API}/patients/${patientId}/notifications/read-all`,{method:'PUT'});
-const badge=document.getElementById('notifBadge');
-badge.classList.add('hidden');
-loadNotifications();
-}catch(e){}
-}
-async function loadProgress(){
-try{
-const r=await fetch(`${API}/patients/${patientId}/progress`);const d=await r.json();
-if(!d.success)return;
-const p=d.progress;
-
-// Logros
-const ach=document.getElementById('progressAchievements');
-const badges=ach.querySelectorAll('.progress-badge-value');
-badges[0].textContent=p.achievements.streakDays||0;
-badges[1].textContent=p.achievements.totalCheckins||0;
-badges[2].textContent=`${p.achievements.completedTasks||0}/${p.achievements.totalTasks||0}`;
-badges[3].textContent=`${p.achievements.completedGoals||0}/${p.achievements.totalGoals||0}`;
-
-// Tendencias semanales
-const weekly=document.getElementById('progressWeekly');
-if(!p.weeklyTrends?.length){weekly.innerHTML='<p style="text-align:center;color:#888;font-size:.85rem;padding:10px">Sin datos aún</p>';}
-else{
-weekly.innerHTML=p.weeklyTrends.map((w,i)=>{
-  const prev=p.weeklyTrends[i+1];
-  let arrow='',arrowClass='neutral';
-  if(prev&&prev.avg_mood){
-    const diff=w.avg_mood-prev.avg_mood;
-    if(diff>=0.4){arrow='↑';arrowClass='up';}
-    else if(diff<=-0.4){arrow='↓';arrowClass='down';}
-    else{arrow='→';}
-  }
-  return`<div class="progress-week">
-    <div class="progress-week-label">${w.week.replace('Esta','')||'Actual'}</div>
-    <div class="progress-week-arrow ${arrowClass}">${arrow} ${w.avg_mood}</div>
-    <div style="font-size:.65rem;color:#94a3b8">${w.count} check-ins</div>
-  </div>`;
-}).join('');
-}
-
-// Nota clínica (resumen)
-const noteDiv=document.getElementById('progressNote');
-if(p.latestNote){
-  noteDiv.classList.remove('hidden');
-  noteDiv.innerHTML=`<div class="progress-note-label">📝 Resumen de tu terapeuta</div><div>"${p.latestNote.excerpt}"</div><div style="font-size:.7rem;color:#94a3b8;margin-top:6px">${new Date(p.latestNote.date).toLocaleDateString('es-ES')} · ${p.totalNotes||0} nota(s) clínica(s)</div>`;
-}else{noteDiv.classList.add('hidden');}
-
-// Timeline
-const tl=document.getElementById('progressTimeline');
-if(!p.timeline?.length){tl.innerHTML='';return;}
-tl.innerHTML=p.timeline.map(t=>{
-  const iconMap={checkin:'🌤️',task_done:'✅',goal_done:'🎯'};
-  const icon=iconMap[t.type]||'📌';
-  const date=new Date(t.date);
-  const timeStr=date.toLocaleDateString('es-ES')===new Date().toLocaleDateString('es-ES')
-    ?date.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
-    :date.toLocaleDateString('es-ES',{day:'numeric',month:'short'});
-  return`<div class="progress-timeline-item"><span class="progress-timeline-icon">${icon}</span><span>${t.summary}</span><span class="progress-timeline-date">${timeStr}</span></div>`;
-}).join('');
-}catch(e){console.error('Progress error:',e);}
-}
-function toastMsg(text,type='success'){
-const toast=document.getElementById('toast');const el=document.getElementById('toastText');
-el.textContent=text;toast.className='toast'+(type==='error'?' error':'');
-toast.classList.remove('hidden');toast.classList.add('show');
-setTimeout(()=>{toast.classList.remove('show');setTimeout(()=>toast.classList.add('hidden'),300);},3000);
-}
-</script>
+<script src="/js/patient.js"></script>
 </body>
 </html>

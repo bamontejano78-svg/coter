@@ -17,8 +17,8 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://fonts.googleapis.com"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "blob:"],
       connectSrc: ["'self'"],
@@ -48,10 +48,19 @@ const apiLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: config.RATE_LIMIT_WINDOW_MS,
-  max: config.isProd ? 10 : 100,
+  max: config.isProd ? 5 : 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Demasiados intentos, espera unos minutos' },
+});
+
+// Rate limiting aún más estricto para registro (previene creación masiva de cuentas)
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: config.isProd ? 3 : 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Demasiados registros. Intenta más tarde.' },
 });
 
 // ─── Logging HTTP ─────────────────────────────────────────────
@@ -62,16 +71,28 @@ if (config.isProd) {
 }
 
 // ─── Rutas (API v1) ───────────────────────────────────────────
-app.use('/api/v1/therapists', authLimiter);
+// Register usa registerLimiter (más estricto, 3 req/hora en prod)
+// El resto de rutas de therapist usan authLimiter
+// Para evitar doble rate limiting, excluimos /register de authLimiter
+app.use('/api/v1/therapists', (req, res, next) => {
+  if (req.path === '/register') return next();
+  authLimiter(req, res, next);
+});
+app.use('/api/v1/therapists/register', registerLimiter);
 app.use('/api/v1/patients', apiLimiter);
 app.use('/api/v1/therapists', therapistRoutes);
 app.use('/api/v1/patients', patientRoutes);
 
 // Compatibilidad con rutas antiguas sin version
-app.use('/api/therapists', authLimiter, therapistRoutes);
+app.use('/api/therapists', (req, res, next) => {
+  if (req.path === '/register') return next();
+  authLimiter(req, res, next);
+});
+app.use('/api/therapists/register', registerLimiter);
+app.use('/api/therapists', therapistRoutes);
 app.use('/api/patients', apiLimiter, patientRoutes);
 
-// Health check mejorado
+// Health check mejorado con estadísticas del pool
 app.get('/api/health', async (req, res) => {
   try {
     const { getPool } = require('./database');
@@ -87,6 +108,15 @@ app.get('/api/health', async (req, res) => {
       environment: config.NODE_ENV,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
+      pool: {
+        total: pool.totalCount,
+        idle: pool.idleCount,
+        waiting: pool.waitingCount,
+      },
+      memory: {
+        rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + ' MB',
+        heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
+      },
     });
   } catch (err) {
     res.status(503).json({

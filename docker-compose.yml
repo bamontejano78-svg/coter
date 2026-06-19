@@ -18,18 +18,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - coter
 
   # API
   api:
     build: .
     container_name: coter-api
-    ports:
-      - '3000:3000'
     environment:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
-      DATABASE_URL: postgresql://coter:${DB_PASSWORD:-coter_dev}@postgres:5432/coter
+      DATABASE_URL: ${DATABASE_URL:-postgresql://coter:${DB_PASSWORD:-coter_dev}@postgres:5432/coter}
       JWT_SECRET: ${JWT_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
@@ -37,11 +38,60 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASS: ${SMTP_PASS:-}
-      APP_URL: ${APP_URL:-http://localhost:3000}
+      SMTP_FROM: ${SMTP_FROM:-noreply@coter.app}
+      APP_URL: ${APP_URL:-https://coter.app}
+      REFRESH_TOKEN_DAYS: ${REFRESH_TOKEN_DAYS:-30}
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - coter
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Nginx (reverse proxy + SSL)
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+      args:
+        ENV: production
+    container_name: coter-nginx
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      # Let's Encrypt certificates (se montan desde el host)
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - coter
+
+  # Certbot — renovación automática de Let's Encrypt
+  certbot:
+    image: certbot/certbot:latest
+    container_name: coter-certbot
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet --deploy-hook \"docker exec coter-nginx nginx -s reload\"; sleep 12h & wait $${!}; done'"
+    restart: unless-stopped
+    networks:
+      - coter
 
 volumes:
   pgdata:
+  certbot_www:
+
+networks:
+  coter:
+    driver: bridge

@@ -30,6 +30,7 @@ const DB_POOL_MAX = parseInt(process.env.DB_POOL_MAX, 10) || 10;
 // ─── JWT ────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || (isProd ? '7d' : '30d');
+const REFRESH_TOKEN_DAYS = parseInt(process.env.REFRESH_TOKEN_DAYS, 10) || (isProd ? 30 : 90);
 
 // ─── Encriptación ───────────────────────────────────────────────
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
@@ -102,6 +103,7 @@ module.exports = {
   DB_POOL_MAX,
   JWT_SECRET: JWT_SECRET || 'coter_dev_secret_DO_NOT_USE_IN_PRODUCTION',
   JWT_EXPIRES_IN,
+  REFRESH_TOKEN_DAYS,
   ENCRYPTION_KEY,
   SMTP_HOST,
   SMTP_PORT,

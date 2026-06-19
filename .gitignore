@@ -43,9 +43,18 @@ coverage/
 
 # Certificates
 certs/
+!nginx/certs/.gitkeep
 *.pem
 *.key
 *.crt
+
+# Credenciales — NUNCA commitear archivos con secrets
+*.pem
+*.key
+*.crt
+*.env
+*.env.*
+!*.env.example
 
 # Misc
 *.tmp

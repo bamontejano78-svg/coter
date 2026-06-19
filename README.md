@@ -90,7 +90,8 @@ docker-compose logs -f api
 - `GET /api/v1/therapists/task-templates` — Biblioteca TCC 🔒
 - `GET /api/v1/therapists/calendar?month=YYYY-MM` — Calendario 🔒
 - `GET /api/v1/therapists/export/:patientId` — Exportar datos 🔒
-- `POST /api/v1/therapists/connection-codes` — Nuevo código 🔒
+- `POST /api/v1/therapists/refresh-token` — Refrescar access token
+- `POST /api/v1/therapists/logout` — Cerrar sesión (revoca refresh tokens)
 
 ### Pacientes
 - `POST /api/v1/patients/connect` — Conectar con código
