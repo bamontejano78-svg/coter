@@ -29,6 +29,9 @@ COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/www ./www
 COPY --from=builder /app/public ./public
 
+# Crear directorio de logs antes de cambiar a usuario no-root
+RUN mkdir -p /app/logs
+
 # Usuario no-root
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 USER nodejs
@@ -38,6 +41,7 @@ EXPOSE 3000
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3000
+ENV DOCKER_CONTAINER=true
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 3000) + '/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"
