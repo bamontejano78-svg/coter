@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Dependencias
 COPY package*.json ./
-RUN npm ci --production=false
+RUN npm install --no-audit --no-fund 2>&1
 
 # Codigo fuente
 COPY . .
@@ -16,7 +16,7 @@ WORKDIR /app
 
 # Instalar solo dependencias de produccion
 COPY package*.json ./
-RUN npm ci --production && npm cache clean --force
+RUN npm install --omit=dev --no-audit --no-fund 2>&1 && npm cache clean --force
 
 # Copiar archivos necesarios
 COPY --from=builder /app/server.js .
