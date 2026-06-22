@@ -11,6 +11,36 @@ let templates=[],templateCategories=[],activeCategory=null;
 let isRefreshing=false;
 let refreshPromise=null;
 
+// ─── CACHE DE PACIENTES ───────────────────────────────────────
+// Usado al asignar plantillas desde la biblioteca. Distingue entre
+// "0 pacientes reales" y "error al cargar" — antes un catch silencioso
+// mostraba el mensaje falso "no tienes pacientes" incluso cuando el
+// fetch fallaba por red o token.
+let patientsCache=null;
+let patientsCacheAt=0;
+const PATIENTS_CACHE_TTL=30000; // 30s
+
+async function getPatients({force=false}={}){
+  const now=Date.now();
+  if(!force&&patientsCache!==null&&(now-patientsCacheAt)<PATIENTS_CACHE_TTL){
+    return patientsCache;
+  }
+  const r=await api(`${API}/therapists/patients`);
+  const d=await r.json();
+  patientsCacheAt=now;
+  if(!d.success){
+    patientsCache=null;
+    throw new Error(d.error||'Servidor respondió success=false');
+  }
+  patientsCache=d.patients||[];
+  return patientsCache;
+}
+
+function invalidatePatientsCache(){
+  patientsCache=null;
+  patientsCacheAt=0;
+}
+
 // ═══════════════════════════════════════════════════════════
 // ANIMACIONES Y MICRO-INTERACCIONES
 // ═══════════════════════════════════════════════════════════
@@ -226,16 +256,16 @@ function updateTrendChart(data){
   ]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{min:1,max:10}}}});
 }
 
-async function loadPatients(){
+async function loadPatients({force=false}={}){
   try{
-    const r=await api(`${API}/therapists/patients`);const d=await r.json();
+    const patients=await getPatients({force});
     const tbody=document.getElementById('patientsTableBody');
-    if(!d.success||!d.patients?.length){tbody.innerHTML='<tr><td colspan="6" class="empty-cell">No tienes pacientes aún</td></tr>';return;}
-    tbody.innerHTML=d.patients.map(p=>{
+    if(!patients.length){tbody.innerHTML='<tr><td colspan="6" class="empty-cell">No tienes pacientes aún</td></tr>';return;}
+    tbody.innerHTML=patients.map(p=>{
       const badge=p.last_mood<=3?'badge-risk':p.last_mood>=7?'badge-ok':'badge-warn';
       return`<tr><td><strong>${sanitizeHTML(p.name||'Anónimo')}</strong><br><small class="id-sub">${p.id?.slice(0,12)}...</small></td><td>${new Date(p.connected_at).toLocaleDateString('es-ES')}</td><td>${p.last_checkin?new Date(p.last_checkin).toLocaleDateString('es-ES'):'Nunca'}</td><td><strong>${p.last_mood||'-'}/10</strong></td><td><span class="badge ${badge}">${p.last_mood<=3?'⚠️ Riesgo':'✅ Estable'}</span></td><td><button class="btn btn-p btn-sm btn-open-patient" data-patient-id="${p.id}">📋 Ver</button></td></tr>`;
     }).join('');
-  }catch(e){console.error(e);}
+  }catch(e){console.error('Error cargando pacientes:',e);}
 }
 
 async function openPatient(patientId){
@@ -479,9 +509,38 @@ function toggleTemplate(id){
 
 async function assignTemplateToPatient(templateId){
   const template=templates.find(t=>t.id===templateId);if(!template)return;
+
   let patients=[];
-  try{const r=await api(`${API}/therapists/patients`);const d=await r.json();patients=d.patients||[];}catch(e){}
-  if(!patients.length)return Swal.fire('Sin pacientes','No tienes pacientes para asignar esta tarea','info');
+  let fetchError=null;
+  try{
+    patients=await getPatients();
+  }catch(e){
+    fetchError=e;
+    console.error('[assignTemplateToPatient] fetch /therapists/patients falló:',e);
+  }
+
+  if(fetchError){
+    const retry=await Swal.fire({
+      title:'Error al cargar pacientes',
+      text:'No pudimos obtener tu lista de pacientes. Comprueba tu conexión e inténtalo de nuevo.',
+      icon:'error',
+      showCancelButton:true,
+      confirmButtonText:'Reintentar',
+      cancelButtonText:'Cancelar'
+    });
+    if(!retry.isConfirmed)return;
+    invalidatePatientsCache();
+    return assignTemplateToPatient(templateId);
+  }
+
+  if(!patients.length){
+    return Swal.fire({
+      title:'Sin pacientes',
+      text:'Aún no tienes pacientes conectados. Ve a "🔑 Código de acceso" para crear uno.',
+      icon:'info'
+    });
+  }
+
   const options={};
   patients.forEach(p=>{options[p.id]=p.name||'Anónimo (ID:'+p.id.slice(0,8)+')';});
   const {value:pId}=await Swal.fire({title:'Asignar a paciente',text:`Tarea: ${template.title}`,input:'select',inputOptions:options,inputPlaceholder:'Selecciona un paciente...',showCancelButton:true,confirmButtonText:'Asignar',cancelButtonText:'Cancelar'});
@@ -489,7 +548,10 @@ async function assignTemplateToPatient(templateId){
   try{
     await api(`${API}/therapists/patients/${pId}/assignments`,{method:'POST',body:JSON.stringify({type:template.category,title:template.title,instructions:template.instructions})});
     Swal.fire({title:'✅ Tarea asignada',text:`"${template.title}" asignada al paciente`,icon:'success',timer:2000,showConfirmButton:false});
-  }catch(e){Swal.fire('Error','No se pudo asignar la tarea','error');}
+  }catch(e){
+    console.error('[assignTemplateToPatient] asignación falló:',e);
+    Swal.fire('Error','No se pudo asignar la tarea','error');
+  }
 }
 
 // ==================== PLANTILLAS PERSONALIZADAS (CRUD) ====================
@@ -596,7 +658,7 @@ function showNewPatient(){
     try{
       const r=await api(`${API}/therapists/connection-codes`,{method:'POST',body:JSON.stringify({duration_hours:720,max_uses:1,patient_name:name})});
       const d=await r.json();
-      if(d.success){loadCode();Swal.fire({title:'¡Código creado!',html:`<h3 class="code-popup-name">${name}</h3><div class="code-box code-box-popup">${d.code}</div><p class="code-popup-text">Comparte este código exclusivo con ${name.split(' ')[0]}</p>`,icon:'success'});}
+      if(d.success){loadCode();invalidatePatientsCache();Swal.fire({title:'¡Código creado!',html:`<h3 class="code-popup-name">${name}</h3><div class="code-box code-box-popup">${d.code}</div><p class="code-popup-text">Comparte este código exclusivo con ${name.split(' ')[0]}</p>`,icon:'success'});}
       else Swal.fire('Error',d.error||'No se pudo crear el código','error');
     }catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
   }});
@@ -687,7 +749,7 @@ document.addEventListener('click', function(e){
       case 'show-register': showRegister(); break;
       case 'show-login': showLogin(); break;
       case 'logout': logout(); break;
-      case 'refresh-patients': loadPatients(); break;
+      case 'refresh-patients': loadPatients({force:true}); break;
       case 'refresh-code': loadCode(); break;
       case 'gen-code': generateCode(); break;
       case 'new-patient': showNewPatient(); break;
