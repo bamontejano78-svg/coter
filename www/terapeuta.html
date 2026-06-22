@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/css/therapist.css">
 </head>
 <body>
@@ -41,7 +42,12 @@
 
 <div id="appScreen" class="hidden">
 <div class="sidebar">
-<div class="logo">Coter Pro</div>
+<div class="logo">
+  <svg class="logo-icon" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  </svg>
+  <span>Coter Pro</span>
+</div>
 <div class="nav-item active" data-tab="dashboard">Dashboard</div>
 <div class="nav-item" data-tab="patients">Pacientes</div>
 <div class="nav-item" data-tab="code">Código de acceso</div>

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" role="img" aria-label="Coter">
+  <style>
+    #coter-mark {
+      stroke: #4f46e5;
+      fill: none;
+      stroke-width: 3;
+      stroke-linecap: round;
+    }
+    /* Safari no re-fetchea el favicon en cambio de theme, asi que el
+       stroke #5b56f4 sirve decentemente en ambos modos. Chrome / Edge /
+       Firefox si respetan @media y muestran indigo-light en dark. */
+    @media (prefers-color-scheme: dark) {
+      #coter-mark { stroke: #818cf8; }
+    }
+  </style>
+  <title>Coter</title>
+  <path id="coter-mark" d="M 20 7.5 A 9 9 0 1 0 20 16.5"/>
+</svg>

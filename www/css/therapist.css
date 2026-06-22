@@ -111,6 +111,13 @@ body {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.2px;
+  user-select: none;
+}
+
+.logo-icon {
+  color: var(--p);
+  display: block;
+  flex-shrink: 0;
 }
 
 .logo::before {
