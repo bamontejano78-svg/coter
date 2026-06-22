@@ -382,6 +382,69 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── DESCONECTAR PACIENTE ───────────────────────────────────
+// Soft-disconnect: marca el vínculo therapist_patients como 'inactive'
+// en vez de borrar la fila. Conserva el historial clínico (check-ins,
+// mensajes, tareas, objetivos, notas) para consulta futura y para
+// eventuales re-links. El paciente sigue pudiendo usar su app con el
+// auth_token existente, pero no podrá enviar mensajes nuevos a este
+// terapeuta (porque messages POST requiere status='active').
+router.delete('/patients/:patientId/connections', authenticateToken, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const { reason } = req.body || {};
+    const pool = getPool();
+
+    // Verificar que el terapeuta tiene un vínculo con este paciente
+    // (activo o previamente inactivo). No devolvemos 404 si el vínculo
+    // existe pero ya está inactivo: la operación es idempotente.
+    const { rows: linkRows } = await pool.query(
+      'SELECT id, status FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2',
+      [req.user.id, patientId]
+    );
+    if (linkRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Vínculo con el paciente no encontrado' });
+    }
+    if (linkRows[0].status !== 'active') {
+      return res.json({ success: true, message: 'El paciente ya estaba desconectado', already_inactive: true });
+    }
+
+    await pool.query(
+      "UPDATE therapist_patients SET status = 'inactive' WHERE id = $1",
+      [linkRows[0].id]
+    );
+
+    // Notificar al paciente para que sepa por qué sus próximos intentos de
+    // enviar mensajes rebotarán con 400. Si el cliente está abierto verá esto
+    // en su panel de notificaciones; si no, lo verá cuando vuelva a entrar.
+    // La notificación es best-effort: si falla, el disconnect ya quedó hecho
+    // en la fila therapist_patients — no queremos revertir ni devolver 500 al
+    // terapeuta por un problema de notificaciones.
+    try {
+      await createNotification(
+        pool,
+        patientId,
+        'system',
+        'Tu terapeuta termin\u00f3 la conexi\u00f3n',
+        'Ya no podr\u00e1s enviarle mensajes nuevos. El historial cl\u00ednico se conserva.',
+        null
+      );
+    } catch (notifErr) {
+      logger.warn('No se pudo notificar al paciente tras disconnect', { error: notifErr.message, patientId });
+    }
+
+    auditChange(req, 'disconnect_patient', 'therapist_patient', linkRows[0].id, {
+      patientId,
+      reason: reason ? String(reason).slice(0, 500) : null,
+    });
+
+    res.json({ success: true, message: 'Paciente desconectado', patient_id: patientId });
+  } catch (err) {
+    logger.error('Error desconectando paciente', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor al desconectar' });
+  }
+});
+
 // ─── PERFIL DE PACIENTE ──────────────────────────────────────
 router.get('/patients/:patientId', authenticateToken, async (req, res) => {
   try {

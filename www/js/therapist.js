@@ -627,6 +627,34 @@ async function deleteCustomTemplate(templateId){
   }catch(e){Swal.fire('Error','No se pudo eliminar','error');}
 }
 
+async function disconnectPatient(){
+  if(!currentPatientId)return showToast('No hay paciente seleccionado','error');
+  const patientName=document.getElementById('modalPatientName')?.textContent||'este paciente';
+  const result=await Swal.fire({
+    title:'¿Desconectar paciente?',
+    html:`<p>Vas a desconectar a <strong>${sanitizeHTML(patientName)}</strong>.</p><p style="color:#888;font-size:.85rem;margin-top:8px">El historial clínico (check-ins, mensajes, tareas, notas) se conserva, pero el paciente dejará de aparecer en tu lista activa y no podŕa enviarte mensajes nuevos. Se puede volver a conectar con un nuevo código.</p>`,
+    input:'textarea',
+    inputPlaceholder:'Motivo (opcional, solo para tu registro)',
+    inputAttributes:{'maxlength':'500','aria-label':'Motivo de desconexión'},
+    icon:'warning',
+    showCancelButton:true,
+    confirmButtonText:'Sí, desconectar',
+    cancelButtonText:'Cancelar',
+    confirmButtonColor:'#ef4444',
+  });
+  if(!result.isConfirmed)return;
+  try{
+    await api(`${API}/therapists/patients/${currentPatientId}/connections`,{method:'DELETE',body:JSON.stringify({reason:(result.value||'').trim()})});
+    invalidatePatientsCache();
+    closePatientModal();
+    await loadPatients({force:true});
+    Swal.fire({title:'Paciente desconectado',text:`${sanitizeHTML(patientName)} ya no aparece en tu lista activa`,icon:'success',timer:1800,showConfirmButton:false});
+  }catch(e){
+    console.error('[disconnectPatient] error:',e);
+    Swal.fire('Error','No se pudo desconectar al paciente','error');
+  }
+}
+
 async function exportPatientData(){
   if(!currentPatientId)return;
   try{
@@ -754,6 +782,7 @@ document.addEventListener('click', function(e){
       case 'gen-code': generateCode(); break;
       case 'new-patient': showNewPatient(); break;
       case 'export-patient': exportPatientData(); break;
+      case 'disconnect-patient': disconnectPatient(); break;
       case 'close-modal': closePatientModal(); break;
       case 'send-msg': sendTherapistMsg(); break;
       case 'add-task': showAddTask(); break;

@@ -831,3 +831,162 @@ describe('GET /api/v1/therapists/patients error handling (regression)', () => {
     }
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOFT-DISCONNECT: DELETE /api/v1/therapists/patients/:id/connections
+// ═══════════════════════════════════════════════════════════════════════════════
+// El terapeuta puede desconectar a un paciente. Soft-delete: la fila
+// therapist_patients se marca status='inactive' (no se borra) para
+// preservar el historial clínico y permitir re-links futuros. El frontend
+// debe invalidar el cache de pacientes (getPatients) tras una desconexión
+// exitosa; este bloque también prueba esa pieza del flujo si en el futuro
+// se monta un test E2E con jsdom.
+describe('DELETE /api/v1/therapists/patients/:id/connections (soft disconnect)', () => {
+  let tToken;
+  let tId;
+  let pId;
+  let linkId;
+
+  beforeAll(async () => {
+    const reg = await request(app)
+      .post('/api/v1/therapists/register')
+      .send({ name: 'Dr. Disconnect', email: 'disconnect@coter.com', specialty: 'psicologia', password: 'test1234' });
+    tToken = reg.body.token;
+    tId = reg.body.therapist.id;
+
+    const code = await request(app)
+      .post('/api/v1/therapists/connection-codes')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({ duration_hours: 24, max_uses: 1 });
+    const connect = await request(app)
+      .post('/api/v1/patients/connect')
+      .send({ connection_code: code.body.code });
+    pId = connect.body.patient_id;
+
+    const { rows } = await pool.query(
+      'SELECT id FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2',
+      [tId, pId]
+    );
+    linkId = rows[0].id;
+  });
+
+  test('DELETE /connections without token returns 401', async () => {
+    const res = await request(app).delete('/api/v1/therapists/patients/' + pId + '/connections');
+    expect(res.statusCode).toBe(401);
+  });
+
+  test('DELETE /connections with valid active link marks it inactive and removes from active list', async () => {
+    // El paciente aparece en la lista activa antes de la desconexión
+    const before = await request(app)
+      .get('/api/v1/therapists/patients')
+      .set('Authorization', 'Bearer ' + tToken);
+    expect(before.body.patients.some(p => p.id === pId)).toBe(true);
+
+    // Acción: desconectar (con reason opcional)
+    const res = await request(app)
+      .delete('/api/v1/therapists/patients/' + pId + '/connections')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({ reason: 'Cambio de profesional' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.message).toContain('desconectado');
+    expect(res.body.patient_id).toBe(pId);
+
+    // El paciente ya no aparece en la lista activa
+    const after = await request(app)
+      .get('/api/v1/therapists/patients')
+      .set('Authorization', 'Bearer ' + tToken);
+    expect(after.body.patients.some(p => p.id === pId)).toBe(false);
+
+    // La fila therapist_patients sigue existiendo, pero con status='inactive'
+    const { rows } = await pool.query(
+      'SELECT status FROM therapist_patients WHERE id = $1',
+      [linkId]
+    );
+    expect(rows[0].status).toBe('inactive');
+  });
+
+  test('DELETE /connections is idempotent — calling again returns success with already_inactive flag', async () => {
+    const res = await request(app)
+      .delete('/api/v1/therapists/patients/' + pId + '/connections')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({});
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.already_inactive).toBe(true);
+  });
+
+  test('DELETE /connections returns 404 when another therapist has no link to that patient', async () => {
+    // Registrar un segundo terapeuta sin vínculo con pId
+    const otherReg = await request(app)
+      .post('/api/v1/therapists/register')
+      .send({ name: 'Dr. Extrano', email: 'extrano@coter.com', specialty: 'psi', password: 'test1234' });
+    const otherToken = otherReg.body.token;
+
+    const res = await request(app)
+      .delete('/api/v1/therapists/patients/' + pId + '/connections')
+      .set('Authorization', 'Bearer ' + otherToken)
+      .send({});
+    expect(res.statusCode).toBe(404);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toContain('Vínculo');
+  });
+
+  test('GET /patients/:id still returns the patient profile even after disconnect (history preserved)', async () => {
+    // Aunque la lista activa lo excluye, el perfil completo sigue accesible.
+    // Esto valida que el soft-delete NO purga check_ins/messages/assignments.
+    const res = await request(app)
+      .get('/api/v1/therapists/patients/' + pId)
+      .set('Authorization', 'Bearer ' + tToken);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.patient.id).toBe(pId);
+  });
+
+  test('Patient app cannot send new messages after disconnect (lockdown via therapist_patients.status)', async () => {
+    // Reconstruimos un vínculo activo + un auth_token para el paciente,
+    // luego desconectamos, y verificamos que POST /messages desde el paciente
+    // rebota con 400. Esto cierra el flujo de la documentación del handler:
+    // "patient_app keeps working pero messages POST requiere status='active'".
+    const code2 = await request(app)
+      .post('/api/v1/therapists/connection-codes')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({ duration_hours: 24, max_uses: 1 });
+    const connect2 = await request(app)
+      .post('/api/v1/patients/connect')
+      .send({ connection_code: code2.body.code });
+    const freshPId = connect2.body.patient_id;
+    const freshAuth = connect2.body.auth_token;
+
+    // Sanity: con vínculo activo el paciente SÍ puede enviar
+    const okRes = await request(app)
+      .post('/api/v1/patients/' + freshPId + '/messages')
+      .set('Authorization', 'Bearer ' + freshAuth)
+      .send({ message: 'hola antes de desconectar' });
+    expect(okRes.statusCode).toBe(200);
+
+    // Desconectamos desde el terapeuta
+    await request(app)
+      .delete('/api/v1/therapists/patients/' + freshPId + '/connections')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({});
+
+    // Tras desconectar: el paciente NO puede enviar nuevos mensajes
+    const blockedRes = await request(app)
+      .post('/api/v1/patients/' + freshPId + '/messages')
+      .set('Authorization', 'Bearer ' + freshAuth)
+      .send({ message: 'esto no debería llegar' });
+    expect(blockedRes.statusCode).toBe(400);
+    expect(blockedRes.body.error).toMatch(/conectado|no encontrado/i);
+
+    // El paciente recibe una notificación system del corte
+    const notifRes = await request(app)
+      .get('/api/v1/patients/' + freshPId + '/notifications')
+      .set('Authorization', 'Bearer ' + freshAuth);
+    expect(notifRes.statusCode).toBe(200);
+    expect(Array.isArray(notifRes.body.notifications)).toBe(true);
+    const sysNotifs = notifRes.body.notifications.filter(n => n.type === 'system');
+    expect(sysNotifs.length).toBeGreaterThanOrEqual(1);
+    expect(sysNotifs[0].title).toMatch(/termin|conexi/i);
+  });
+});
