@@ -731,3 +731,103 @@ describe('Therapist Dashboard', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+// REGRESIÓN: GET /api/v1/therapists/patients — manejo de errores
+// ══════════════════════════════════════════════════════════════
+// Bug original: el frontend (www/js/therapist.js → assignTemplateToPatient)
+// tenía un `catch(e){}` silencioso que tragaba cualquier error de red/token
+// y mostraba el falso mensaje "no tienes pacientes para asignar esta tarea"
+// cuando el fetch fallaba. Estos tests bloquean el contrato del backend:
+// la respuesta distingue "lista vacía" de "error de carga". Si en el
+// futuro alguien refactoriza la ruta y devuelve success:true con array
+// vacío cuando la query lanza, el frontend engañará al usuario otra vez.
+describe('GET /api/v1/therapists/patients error handling (regression)', () => {
+  let emptyToken;
+
+  beforeAll(async () => {
+    // Terapeuta sin pacientes conectados: útil para verificar el caso vacío
+    const regRes = await request(app)
+      .post('/api/v1/therapists/register')
+      .send({ name: 'Dr. ErrorsTest', email: 'errors@coter.com', specialty: 'psicologia', password: 'test1234' });
+    emptyToken = regRes.body.token;
+  });
+
+  test('GET /patients returns 200 success:true with empty patients array when therapist has no patients', async () => {
+    const res = await request(app)
+      .get('/api/v1/therapists/patients')
+      .set('Authorization', 'Bearer ' + emptyToken);
+    // Caso legítimo: "no tienes pacientes" → success:true + []
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toHaveProperty('success', true);
+    expect(Array.isArray(res.body.patients)).toBe(true);
+    expect(res.body.patients).toEqual([]);
+  });
+
+  test('GET /patients returns 500 success:false with error message when DB query throws', async () => {
+    // Forzamos pool.query a fallar para simular un error de capa DB / red
+    // sin depender de tirar Postgres abajo en el suite de tests.
+    const spy = jest.spyOn(pool, 'query').mockImplementation(() => {
+      const err = new Error('Simulated DB connection failure');
+      err.code = '08006';
+      return Promise.reject(err);
+    });
+
+    try {
+      const res = await request(app)
+        .get('/api/v1/therapists/patients')
+        .set('Authorization', 'Bearer ' + emptyToken);
+
+      // Bloqueamos la regresión: este caso debe distinguirse del "0 pacientes".
+      // Si alguien borra el bloque catch o devuelve success:true con []
+      // cuando la query falla, este test fallará y el bug no volverá.
+      expect(res.statusCode).toBe(500);
+      expect(res.body).toHaveProperty('success', false);
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.error.length).toBeGreaterThan(0);
+
+      // Defensa: el mensaje de error NO debe filtrar SQL/tablas al frontend
+      expect(res.body.error).not.toMatch(/SELECT|FROM|JOIN|WHERE/i);
+      expect(res.body.error).not.toMatch(/therapist_patients|patients/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('GET /patients contract: empty (success:true, patients:[]) and error (success:false, error:string) responses are never confused', async () => {
+    // Este test bloquea la regresión a nivel de contrato: si en el futuro
+    // alguien refactoriza la ruta y devuelve success:true con array vacío
+    // cuando la query falla, el frontend volverá a mostrar el falso mensaje
+    // "no tienes pacientes". Mientras las dos respuestas mantenga el flag
+    // success distinto, el frontend puede distinguir UX y el bug no vuelve.
+    // Nota: errores de red puros (TCP/DNS fuera del server) son forzados por
+    // el frontend www/js/therapist.js → getPatients: el `await api(...)` lanza
+    // TypeError que es capturado y enrutado al mismo branch fetchError.
+    const emptyRes = await request(app)
+      .get('/api/v1/therapists/patients')
+      .set('Authorization', 'Bearer ' + emptyToken);
+
+    const spy = jest.spyOn(pool, 'query').mockImplementation(() => {
+      return Promise.reject(new Error('Simulated transient failure'));
+    });
+    try {
+      const errorRes = await request(app)
+        .get('/api/v1/therapists/patients')
+        .set('Authorization', 'Bearer ' + emptyToken);
+
+      // El discriminador que el frontend lee es el campo `success`.
+      expect(emptyRes.body.success).toBe(true);
+      expect(emptyRes.body.patients).toEqual([]);
+      expect(emptyRes.statusCode).toBe(200);
+
+      expect(errorRes.body.success).toBe(false);
+      expect(errorRes.body).toHaveProperty('error');
+      expect(errorRes.statusCode).toBe(500);
+
+      // Discriminador opuesto: si se igualasen, el frontend engañaría al usuario.
+      expect(emptyRes.body.success).not.toBe(errorRes.body.success);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

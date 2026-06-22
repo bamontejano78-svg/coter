@@ -346,7 +346,11 @@ router.get('/patients', authenticateToken, async (req, res) => {
     });
   } catch (err) {
     logger.error('Error cargando pacientes', { error: err.message });
-    res.status(500).json({ success: false });
+    // Incluimos `error` en el body para que el frontend (www/js/therapist.js
+    // → getPatients) distinga entre "0 pacientes" (`success:true` con array vacío)
+    // y "fallo de carga" (`success:false`). Sin este campo, un catch silencioso
+    // en el frontend mostraba el falso mensaje "no tienes pacientes".
+    res.status(500).json({ success: false, error: 'Error del servidor al cargar pacientes' });
   }
 });
 
