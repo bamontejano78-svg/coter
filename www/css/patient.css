@@ -817,3 +817,44 @@ textarea:focus {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ─── Dark mode ────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* surface */
+    --bg:        #0a1220;
+    --g:         #0f172a;
+    --white:     #131c30;
+
+    /* border */
+    --b:        #1f2a3d;
+
+    /* text */
+    --t:        #e2e8f0;
+    --muted:    #94a3b8;
+    --soft:     #94a3b8;
+
+    /* primary indigo accent */
+    --p:        #818cf8;
+    --p-light:  #a5b4fc;
+    --p-dark:   #6366f1;
+    --p-soft:   #1e1b4b;
+
+    /* status */
+    --s:        #34d399;
+    --s-light:  #6ee7b7;
+    --s-dark:   #10b981;
+    --s-soft:   #064e3b;
+
+    --w:        #fbbf24;
+    --w-light:  #fcd34d;
+    --w-soft:   #422006;
+
+    --d:        #fca5a5;
+    --d-light:  #fda4af;
+    --d-soft:   #4c1d1d;
+
+    /* shadow más opaco en dark */
+    --shadow-1: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
