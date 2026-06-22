@@ -33,6 +33,13 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 
+// Compatibilidad con URLs antiguas tras renombrar a español
+// Mantiene los bookmarks y enlaces viejos funcionando
+app.get(['/index.html', '/therapist.html'], (req, res) => {
+  const target = req.path === '/index.html' ? '/paciente.html' : '/terapeuta.html';
+  res.redirect(301, target);
+});
+
 // Servir archivos estaticos (frontend)
 app.use(express.static('www'));
 app.use(express.static('public'));

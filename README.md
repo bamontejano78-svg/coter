@@ -128,8 +128,11 @@ coter/
 │   ├── api.test.js     # Tests de integración
 │   └── encryption.test.js # Tests unitarios
 ├── www/                # Frontend (web + Capacitor)
-│   ├── index.html      # App del paciente
-│   └── therapist.html  # Panel del terapeuta
+│   ├── index.html      # Landing selectora (paciente / terapeuta)
+│   ├── paciente.html   # App del paciente
+│   ├── terapeuta.html  # Panel del terapeuta
+│   ├── reset-password.html # Restablecer contraseña (terapeuta)
+│   └── css/, js/, lib/ # Estilos, scripts y librerías
 ├── public/             # Archivos estáticos
 ├── logs/               # Logs (generados)
 ├── server.js           # Punto de entrada

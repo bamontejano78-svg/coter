@@ -76,8 +76,9 @@ http.createServer(app).listen(PORT, () => {
 https.createServer(sslOptions, app).listen(HTTPS_PORT, () => {
   console.log('🔒 HTTPS → https://localhost:' + HTTPS_PORT);
   console.log('');
-  console.log('   🧑‍⚕️  Terapeuta: https://localhost:' + HTTPS_PORT + '/therapist.html');
-  console.log('   🧑‍💻  Paciente:  https://localhost:' + HTTPS_PORT + '/index.html');
+  console.log('   🌟  Inicio:     https://localhost:' + HTTPS_PORT + '/');
+  console.log('   🧑‍⚕️  Terapeuta: https://localhost:' + HTTPS_PORT + '/terapeuta.html');
+  console.log('   🧑‍💻  Paciente:  https://localhost:' + HTTPS_PORT + '/paciente.html');
   console.log('   🩺  Health:    https://localhost:' + HTTPS_PORT + '/api/health');
   console.log('');
   console.log('   ⚠️  Certificado self-signed. El navegador mostrará');

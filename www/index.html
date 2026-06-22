@@ -3,123 +3,68 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Coter – Tu compañero terapéutico</title>
-<script src="/lib/sweetalert2.all.min.js"></script>
-<script src="/lib/chart.umd.min.js"></script>
-<link rel="stylesheet" href="/css/patient.css">
+<meta name="description" content="Coter — Plataforma de acompañamiento terapéutico. Accede como paciente o terapeuta.">
+<title>Coter — Bienvenido</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="/css/landing.css">
 </head>
 <body>
 
-<div class="container">
+<div class="landing-shell">
+  <div class="landing-bg"></div>
 
-<div class="card connect-screen" id="connectScreen">
-<h1>🧠 Coter</h1>
-<p style="font-size:1.1rem;opacity:.9;margin:20px 0 32px">Tu compañero terapéutico digital</p>
-<input type="text" class="code-input" id="codeInput" placeholder="TH-ABC123" maxlength="8" autocomplete="off">
-<button class="btn btn-p" data-action="connect">Conectar con mi terapeuta</button>
-<p style="margin-top:24px;font-size:.9rem;opacity:.7">Pide el código de acceso a tu terapeuta</p>
-</div>
+  <main class="landing-card" aria-labelledby="landing-title">
 
-<div class="hidden" id="mainScreen">
-<div class="therapist-info" style="position:relative">
-<div style="font-size:3rem;margin-bottom:8px">🧑‍⚕️</div>
-<div class="therapist-name" id="therapistName">Cargando...</div>
-<div style="font-size:.9rem;opacity:.7;margin-top:4px">Tu terapeuta está contigo</div>
-<div style="display:flex;justify-content:center;margin-top:12px">
-<div class="notif-bar" data-action="toggle-notifications">
-<span class="notif-bell">🔔</span>
-<span class="notif-badge hidden" id="notifBadge">0</span>
-</div>
-</div>
-</div>
+    <header class="brand">
+      <div class="brand-mark" aria-hidden="true">🧠</div>
+      <h1 id="landing-title" class="brand-name">Coter</h1>
+      <p class="brand-tagline">Tu compañero terapéutico digital</p>
+    </header>
 
-<div class="notif-panel" id="notifPanel">
-<div class="notif-header">
-<h2>🔔 Notificaciones</h2>
-<button class="btn btn-p" style="width:auto;padding:6px 16px;font-size:.8rem" data-action="mark-all-read">✓ Leer todas</button>
-</div>
-<div class="notif-list" id="notifList">
-<div class="notif-empty">Cargando...</div>
-</div>
-</div>
+    <h2 class="prompt">¿Cómo quieres continuar?</h2>
+    <p class="prompt-sub">Selecciona tu rol para entrar al panel correspondiente.</p>
 
-<div class="stats-grid">
-<div class="stat-item"><div class="stat-num" id="streakDays">0</div><div class="stat-label">Días seguidos</div></div>
-<div class="stat-item"><div class="stat-num" id="avgMood">—</div><div class="stat-label">Ánimo prom.</div></div>
-<div class="stat-item"><div class="stat-num" id="tasksDone">0</div><div class="stat-label">Tareas ✓</div></div>
-</div>
+    <div class="role-grid">
 
-<div class="card">
-<h2>📊 Mi progreso</h2>
-<div class="progress-achievements" id="progressAchievements">
-<div class="progress-badge"><div class="progress-badge-value">—</div><div class="progress-badge-label">Racha 🔥</div></div>
-<div class="progress-badge"><div class="progress-badge-value">—</div><div class="progress-badge-label">Check-ins</div></div>
-<div class="progress-badge"><div class="progress-badge-value">—</div><div class="progress-badge-label">Tareas ✓</div></div>
-<div class="progress-badge"><div class="progress-badge-value">—</div><div class="progress-badge-label">Objetivos ✓</div></div>
-</div>
-<div class="progress-weekly" id="progressWeekly">Cargando tendencias...</div>
-<div id="progressNote" class="hidden"></div>
-<div class="progress-timeline" id="progressTimeline"></div>
-</div>
+      <a href="/paciente.html" class="role-card role-patient" data-role="patient">
+        <div class="role-art" aria-hidden="true">
+          <span class="role-emoji">🧑‍💻</span>
+          <span class="role-sparkle s1">✨</span>
+          <span class="role-sparkle s2">💬</span>
+          <span class="role-sparkle s3">🌱</span>
+        </div>
+        <div class="role-body">
+          <div class="role-kicker">Para pacientes</div>
+          <div class="role-title">Soy paciente</div>
+          <p class="role-desc">Conecta con tu terapeuta usando el código <strong>TH-XXXXXX</strong> que te haya facilitado y registra cómo te sientes cada día.</p>
+          <span class="role-cta">Entrar como paciente <span class="role-arrow">→</span></span>
+        </div>
+      </a>
 
-<div class="card">
-<h2>🌤️ ¿Cómo te sientes hoy?</h2>
-<div class="slider-container">
-<div class="slider-label"><span>😊 Ánimo</span><span class="slider-value" id="moodVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="mood" data-slider="mood">
-</div>
-<div class="slider-container">
-<div class="slider-label"><span>😰 Ansiedad</span><span class="slider-value" id="anxietyVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="anxiety" data-slider="anxiety">
-</div>
-<div class="slider-container">
-<div class="slider-label"><span>⚡ Energía</span><span class="slider-value" id="energyVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="energy" data-slider="energy">
-</div>
-<textarea id="thoughts" placeholder="¿Quieres contarle algo especial a tu terapeuta hoy?"></textarea>
-<button class="btn btn-s" data-action="send-checkin">✉️ Enviar check-in</button>
+      <a href="/terapeuta.html" class="role-card role-therapist" data-role="therapist">
+        <div class="role-art" aria-hidden="true">
+          <span class="role-emoji">🧑‍⚕️</span>
+          <span class="role-sparkle s1">📋</span>
+          <span class="role-sparkle s2">🧠</span>
+          <span class="role-sparkle s3">📊</span>
+        </div>
+        <div class="role-body">
+          <div class="role-kicker">Para profesionales</div>
+          <div class="role-title">Soy terapeuta</div>
+          <p class="role-desc">Accede al panel clínico para gestionar pacientes, asignar tareas TCC, revisar el progreso y comunicarte con tu equipo terapéutico.</p>
+          <span class="role-cta">Iniciar sesión <span class="role-arrow">→</span></span>
+        </div>
+      </a>
+
+    </div>
+
+    <footer class="landing-foot">
+      <span class="foot-dot"></span>
+      <span>Coter Pro · Plataforma de acompañamiento terapéutico</span>
+    </footer>
+
+  </main>
 </div>
 
-<div class="card">
-<h2>📈 Mi evolución</h2>
-<canvas id="moodChart" height="100"></canvas>
-</div>
-
-<div class="card">
-<h2>💬 Chat con tu terapeuta</h2>
-<div class="chat-box" id="chatBox">Conectando...</div>
-<div class="chat-input">
-<input type="text" id="msgInput" placeholder="Escribe un mensaje..." >
-<button class="btn btn-p" data-action="send-message" style="width:auto;padding:14px 24px">Enviar</button>
-</div>
-</div>
-
-<div class="card">
-<h2>✅ Mis tareas</h2>
-<div id="tasksList">Cargando...</div>
-</div>
-
-<div class="card">
-<h2>🎯 Mis objetivos</h2>
-<div id="goalsList">Cargando...</div>
-</div>
-
-<div class="card">
-<h2>🧘 Técnicas de relajación</h2>
-<div class="technique-grid">
-<button class="technique-btn technique-breath" data-action="technique" data-technique="breath">🫁 Respiración<br><small>4-7-8</small></button>
-<button class="technique-btn technique-mind" data-action="technique" data-technique="mindfulness">🧠 Mindfulness<br><small>5 min</small></button>
-<button class="technique-btn technique-ground" data-action="technique" data-technique="grounding">🌍 Grounding<br><small>5-4-3-2-1</small></button>
-<button class="technique-btn technique-gratitude" data-action="technique" data-technique="gratitude">🙏 Gratitud<br><small>3 cosas</small></button>
-</div>
-</div>
-
-<button class="btn btn-d" data-action="disconnect">Desconectar</button>
-</div>
-</div>
-
-<div class="toast hidden" id="toast"><span id="toastText"></span></div>
-
-<script src="/js/patient.js"></script>
 </body>
 </html>

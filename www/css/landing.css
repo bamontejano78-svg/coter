@@ -1,0 +1,435 @@
+/* ============================================================
+   Coter — Landing selectora (v1)
+   ============================================================ */
+
+:root {
+  /* Paleta sincronizada con patient.css / therapist.css */
+  --p:        #6366f1;
+  --p-light:  #818cf8;
+  --p-dark:   #4f46e5;
+  --p-soft:   #a78bfa;
+  --s:        #10b981;
+  --s-light:  #34d399;
+  --s-dark:   #059669;
+  --t:        #0f172a;
+  --t-soft:   #475569;
+  --muted:    #64748b;
+  --soft:     #94a3b8;
+  --white:    #ffffff;
+  --b:        #e2e8f0;
+  --bg-grad:  linear-gradient(135deg, #6366f1 0%, #7c3aed 35%, #5b3cc4 70%, #4338ca 100%);
+
+  --radius-xs: 10px;
+  --radius-sm: 14px;
+  --radius:    20px;
+  --radius-lg: 28px;
+
+  --shadow-1:  0 6px 16px rgba(15,23,42,.08);
+  --shadow-2:  0 18px 40px rgba(15,23,42,.12);
+  --shadow-3:  0 30px 60px rgba(31,29,86,.25);
+
+  --ease:      cubic-bezier(.4,0,.2,1);
+  --t-fast:    .18s var(--ease);
+  --t:         .26s var(--ease);
+  --t-slow:    .5s  var(--ease);
+}
+
+/* ─── Reset ────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont,
+               'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  background:
+    radial-gradient(1200px 800px at 85% -10%, rgba(167,139,250,.45), transparent 60%),
+    radial-gradient(900px 700px at 10% 110%, rgba(52,211,153,.30), transparent 55%),
+    var(--bg-grad);
+  background-attachment: fixed;
+  color: var(--white);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* ─── Animated faint blobs in the background ───────────── */
+.landing-shell {
+  position: relative;
+  width: 100%;
+  max-width: 1040px;
+  display: flex;
+  justify-content: center;
+}
+
+.landing-bg {
+  position: absolute;
+  inset: -40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.landing-bg::before,
+.landing-bg::after {
+  content: '';
+  position: absolute;
+  width: 360px; height: 360px;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: .35;
+  animation: blobFloat 14s ease-in-out infinite alternate;
+}
+
+.landing-bg::before {
+  background: rgba(167,139,250,.8);
+  top: -120px; left: -80px;
+}
+
+.landing-bg::after {
+  background: rgba(52,211,153,.55);
+  bottom: -160px; right: -80px;
+  animation-delay: -7s;
+}
+
+@keyframes blobFloat {
+  0%   { transform: translate(0,0)   scale(1); }
+  50%  { transform: translate(40px,30px) scale(1.08); }
+  100% { transform: translate(-30px,20px) scale(.96); }
+}
+
+/* ─── Main glass card ─────────────────────────────────── */
+.landing-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  background: rgba(255,255,255,.96);
+  border-radius: var(--radius-lg);
+  padding: 44px 40px 32px;
+  box-shadow:
+    var(--shadow-3),
+    inset 0 1px 0 rgba(255,255,255,.7);
+  border: 1px solid rgba(255,255,255,.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--t);
+  animation: cardIn .7s var(--ease) both;
+}
+
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(20px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+/* ─── Brand block ─────────────────────────────────────── */
+.brand {
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.brand-mark {
+  font-size: 3.2rem;
+  line-height: 1;
+  display: inline-block;
+  filter: drop-shadow(0 6px 12px rgba(99,102,241,.3));
+  animation: floaty 4s ease-in-out infinite;
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0)   rotate(-2deg); }
+  50%      { transform: translateY(-6px) rotate(2deg); }
+}
+
+.brand-name {
+  font-size: 2.4rem;
+  font-weight: 900;
+  letter-spacing: -.8px;
+  margin-top: 6px;
+  background: linear-gradient(135deg, var(--p), var(--p-soft) 60%, var(--s-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.brand-tagline {
+  font-size: 1.02rem;
+  color: var(--t-soft);
+  margin-top: 4px;
+  font-weight: 500;
+}
+
+/* ─── Prompt ───────────────────────────────────────────── */
+.prompt {
+  text-align: center;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--t);
+  margin-top: 6px;
+}
+
+.prompt-sub {
+  text-align: center;
+  color: var(--muted);
+  font-size: .95rem;
+  margin-top: 6px;
+  margin-bottom: 28px;
+}
+
+/* ─── Role grid ────────────────────────────────────────── */
+.role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.role-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  text-decoration: none;
+  color: inherit;
+  border-radius: var(--radius-lg);
+  padding: 26px 22px 22px;
+  overflow: hidden;
+  background: var(--white);
+  border: 1.5px solid var(--b);
+  box-shadow: var(--shadow-1);
+  transition:
+    transform var(--t),
+    box-shadow var(--t),
+    border-color var(--t);
+  isolation: isolate;
+  cursor: pointer;
+  outline: none;
+}
+
+.role-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity var(--t);
+}
+
+.role-card.role-patient::before {
+  background: linear-gradient(135deg, rgba(99,102,241,.10), rgba(167,139,250,.10));
+}
+
+.role-card.role-therapist::before {
+  background: linear-gradient(135deg, rgba(16,185,129,.10), rgba(52,211,153,.10));
+}
+
+.role-card:hover,
+.role-card:focus-visible {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-2);
+  border-color: transparent;
+}
+
+.role-card:hover::before,
+.role-card:focus-visible::before { opacity: 1; }
+
+.role-card.role-patient:hover {
+  border-color: var(--p-light);
+}
+
+.role-card.role-therapist:hover {
+  border-color: var(--s-light);
+}
+
+.role-card:focus-visible {
+  outline: 3px solid rgba(99,102,241,.4);
+  outline-offset: 3px;
+}
+
+/* Active-press feedback */
+.role-card:active { transform: translateY(-1px) scale(.995); }
+
+/* Entry stagger */
+.role-card:nth-child(1) { animation: slideUp .6s var(--ease) .15s both; }
+.role-card:nth-child(2) { animation: slideUp .6s var(--ease) .28s both; }
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Role art (icon + sparkles) ───────────────────────── */
+.role-art {
+  position: relative;
+  height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.role-emoji {
+  font-size: 3.4rem;
+  line-height: 1;
+  display: inline-block;
+  transition: transform var(--t);
+  filter: drop-shadow(0 8px 14px rgba(15,23,42,.18));
+}
+
+.role-card.role-patient .role-emoji {
+  background: linear-gradient(135deg, #ede9fe, #e0e7ff);
+  padding: 18px 24px;
+  border-radius: 22px;
+}
+
+.role-card.role-therapist .role-emoji {
+  background: linear-gradient(135deg, #dcfce7, #d1fae5);
+  padding: 18px 24px;
+  border-radius: 22px;
+}
+
+.role-card:hover .role-emoji {
+  transform: scale(1.08) rotate(-4deg);
+  animation: bobble 1.2s var(--ease) infinite;
+}
+
+@keyframes bobble {
+  0%, 100% { transform: scale(1.08) rotate(-4deg); }
+  50%      { transform: scale(1.12) rotate(4deg); }
+}
+
+.role-sparkle {
+  position: absolute;
+  font-size: 1.1rem;
+  opacity: 0;
+  transition: opacity var(--t), transform var(--t);
+}
+
+.role-sparkle.s1 { top: 8px;  left: 16%; }
+.role-sparkle.s2 { top: 14px; right: 18%; }
+.role-sparkle.s3 { bottom: 6px; left: 50%; transform: translateX(-50%); }
+
+.role-card:hover .role-sparkle {
+  opacity: 1;
+}
+
+.role-card:hover .role-sparkle.s1 { transform: translate(-4px,-4px) rotate(-15deg); }
+.role-card:hover .role-sparkle.s2 { transform: translate(4px,-4px)  rotate(15deg); }
+.role-card:hover .role-sparkle.s3 { transform: translate(-50%, 4px); }
+
+/* ─── Role body ────────────────────────────────────────── */
+.role-body { display: flex; flex-direction: column; gap: 6px; }
+
+.role-kicker {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: var(--muted);
+}
+
+.role-card.role-patient .role-kicker { color: var(--p-dark); }
+.role-card.role-therapist .role-kicker { color: var(--s-dark); }
+
+.role-title {
+  font-size: 1.45rem;
+  font-weight: 800;
+  color: var(--t);
+  letter-spacing: -.3px;
+}
+
+.role-desc {
+  font-size: .92rem;
+  line-height: 1.55;
+  color: var(--t-soft);
+  margin-top: 4px;
+}
+
+.role-desc strong {
+  font-weight: 700;
+  color: var(--t);
+  background: rgba(99,102,241,.10);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+.role-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+  font-weight: 700;
+  font-size: .98rem;
+  padding: 10px 0;
+  transition: gap var(--t);
+}
+
+.role-card.role-patient .role-cta { color: var(--p-dark); }
+.role-card.role-therapist .role-cta { color: var(--s-dark); }
+
+.role-arrow {
+  display: inline-block;
+  transition: transform var(--t);
+}
+
+.role-card:hover .role-arrow { transform: translateX(6px); }
+.role-card:hover .role-cta { gap: 10px; }
+
+/* ─── Footer ───────────────────────────────────────────── */
+.landing-foot {
+  margin-top: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: .82rem;
+  color: var(--soft);
+  text-align: center;
+}
+
+.foot-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--p), var(--s-light));
+  box-shadow: 0 0 8px rgba(99,102,241,.45);
+}
+
+/* ─── Responsive ───────────────────────────────────────── */
+@media (max-width: 720px) {
+  body { padding: 20px 14px; }
+  .landing-card { padding: 32px 22px 24px; border-radius: var(--radius); }
+  .brand-name { font-size: 2rem; }
+  .brand-mark { font-size: 2.6rem; }
+  .prompt { font-size: 1.15rem; }
+  .prompt-sub { font-size: .88rem; }
+  .role-grid { grid-template-columns: 1fr; gap: 14px; }
+  .role-card { padding: 22px 18px 18px; }
+  .role-art { height: 80px; }
+  .role-emoji { font-size: 2.8rem; padding: 14px 20px; }
+  .role-title { font-size: 1.25rem; }
+}
+
+@media (max-width: 380px) {
+  .landing-card { padding: 26px 18px 22px; }
+  .role-desc { font-size: .85rem; }
+}
+
+/* ─── Reduced motion ───────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .brand-mark,
+  .role-emoji,
+  .role-sparkle,
+  .landing-bg::before,
+  .landing-bg::after,
+  .role-card {
+    animation: none !important;
+    transition: none !important;
+  }
+}
