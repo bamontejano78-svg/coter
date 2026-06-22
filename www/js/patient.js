@@ -99,8 +99,17 @@ async function loadMessages(){
 async function sendMessage(){
   const input=document.getElementById('msgInput');const msg=input.value.trim();
   if(!msg)return;
-  await fetch(`${API}/patients/${patientId}/messages`,{method:'POST',headers:authHeaders(),body:JSON.stringify({message:msg})});
-  input.value='';loadMessages();
+  try{
+    const r=await fetch(`${API}/patients/${patientId}/messages`,{method:'POST',headers:authHeaders(),body:JSON.stringify({message:msg})});
+    const d=await r.json();
+    // FIX: detectar rechazo del backend (ej: status='inactive' tras disconnect)
+    // y avisar al paciente en vez de pretender que el mensaje salió.
+    // Antes este fetch ignoraba la respuesta, vaciaba el input y llamaba
+    // loadMessages; el paciente creía que lo había enviado cuando realmente
+    // el backend lo rechazó con 400 "Paciente no conectado".
+    if(!r.ok||!d.success)return toastMsg(d.error||'No se pudo enviar el mensaje','error');
+    input.value='';loadMessages();
+  }catch(e){toastMsg('Error de conexión','error');}
 }
 
 async function loadTasks(){

@@ -10,6 +10,7 @@ let token=null,refreshToken=null,therapist=null,currentPatientId=null,patientDat
 let templates=[],templateCategories=[],activeCategory=null;
 let isRefreshing=false;
 let refreshPromise=null;
+let patientPoll=null;
 
 // ═══════════════════════════════════════════════════════════
 // ANIMACIONES Y MICRO-INTERACCIONES
@@ -253,10 +254,36 @@ async function openPatient(patientId){
     patientData=d.patient;
     document.getElementById('modalPatientName').textContent=patientData.name||'Paciente '+patientId.slice(0,8);
     renderChat();renderCheckins();renderTasks();renderGoals();renderNotes();
+    // FIX: polling a 4s para que los mensajes del paciente aparezcan en vivo
+    // mientras el modal está abierto. Antes solo se refrescaba al abrir;
+    // mensajes enviados en tiempo real quedaban invisibles hasta que el
+    // terapeuta cerrara y volviera a abrir el modal o enviara él mismo.
+    if(patientPoll)clearInterval(patientPoll);
+    patientPoll=setInterval(async()=>{
+      if(!currentPatientId)return;
+      try{
+        const rp=await api(`${API}/therapists/patients/${currentPatientId}`);const dp=await rp.json();
+        // Comparamos por length Y por id del mensaje más reciente:
+        // - length cambia si entra/sale algo de la ventana.
+        // - latest.id cambia cuando llega un mensaje nuevo (o cuando un
+        //   mensaje viejo cae fuera del límite de 100 en routes/therapist.js
+        //   → el más nuevo se mantiene visible aunque length quede estable).
+        // Antes solo comparabamos length, lo que dejaba invisibles los
+        // mensajes nuevos una vez cruzada la primera centena de historial.
+        if(dp.success&&dp.patient.messages&&patientData&&patientData.messages){
+          const newLatest=dp.patient.messages[0]?.id;
+          const oldLatest=patientData.messages[0]?.id;
+          if(dp.patient.messages.length!==patientData.messages.length||newLatest!==oldLatest){
+            patientData.messages=dp.patient.messages;
+            renderChat();
+          }
+        }
+      }catch(e){console.error('[patientPoll] error:',e);}
+    },4000);
   }catch(e){console.error(e);}
 }
 
-function closePatientModal(){document.getElementById('patientModal').classList.remove('show');currentPatientId=null;patientData=null;}
+function closePatientModal(){document.getElementById('patientModal').classList.remove('show');currentPatientId=null;patientData=null;if(patientPoll){clearInterval(patientPoll);patientPoll=null;}}
 
 function renderChat(){
   const box=document.getElementById('patientChat');
