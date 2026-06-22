@@ -297,8 +297,23 @@ router.post('/connection-codes', authenticateToken, [
 
     res.json({ success: true, code, expires_in_hours: duration_hours, expires_at: expiresAt.toISOString(), max_uses, patient_name: patient_name || null });
   } catch (err) {
-    logger.error('Error creando codigo', { error: err.message });
-    res.json({ success: false, error: 'Error al crear codigo' });
+    logger.error('Error creando codigo', { error: err.message, code: err.code });
+    // Distinguimos causas para que el frontend (www/js/therapist.js →
+    // showNewPatient / generateCode) muestre un mensaje accionable y no
+    // todos los errores de create-code luzcan iguales cuando el usuario
+    // reporta "vuelve a dar error al crear el codigo".
+    // SQLSTATE 42703 = undefined_column. Si patient_name es el culprit,
+    // significa que migrations/004_add_patient_name.sql no se aplicó a
+    // la BD actual y la columna nunca llegó a crearse.
+    // SQLSTATE 08006 / 08001 / 57P01 = conexion caída.
+    // Resto = genérico (no filtramos SQL al cliente).
+    let errorMessage = 'Error al crear codigo';
+    if (err && err.code === '42703' && err.message && /patient_name/i.test(err.message)) {
+      errorMessage = 'La columna patient_name no existe en la BD. Pídele a soporte técnico que corra migrations/004_add_patient_name.sql';
+    } else if (err && (err.code === '08006' || err.code === '08001' || err.code === '57P01')) {
+      errorMessage = 'Error temporal de conexión con la BD. Reintenta en unos segundos.';
+    }
+    res.status(500).json({ success: false, error: errorMessage });
   }
 });
 

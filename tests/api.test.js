@@ -990,3 +990,145 @@ describe('DELETE /api/v1/therapists/patients/:id/connections (soft disconnect)',
     expect(sysNotifs[0].title).toMatch(/termin|conexi/i);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REGRESIÓN: POST /api/v1/therapists/connection-codes — distinci\u00f3n de errores
+// ══════════════════════════════════════════════════════════════════════════════
+// Bug: cuando el endpoint POST /therapists/connection-codes fallaba
+// (columna patient_name ausente porque migrations/004 no se aplic\u00f3,
+// BD temporal inalcanzable, etc.), el catch retornaba siempre el mismo
+// string gen\u00e9rico "Error al crear codigo" — indistinguible desde el
+// frontend. El usuario reportaba "vuelve a dar error al crear el codigo"
+// y hab\u00eda que meterse a Railway logs para diagnosticar.
+//
+// Estos tests bloquean el contrato diferenciador. Si alguien refactoriza
+// el catch y vuelve a una sola cadena para todos los errores, el UX se
+// rompe otra vez para el usuario final.
+describe('POST /api/v1/therapists/connection-codes error contract (regression)', () => {
+  let tToken;
+
+  beforeAll(async () => {
+    const reg = await request(app)
+      .post('/api/v1/therapists/register')
+      .send({ name: 'Dr. CodeCreation', email: 'code-create@coter.com', specialty: 'psi', password: 'test1234' });
+    tToken = reg.body.token;
+  });
+
+  test('POST without patient_name returns success with ISO expires_at (happy path baseline)', async () => {
+    const res = await request(app)
+      .post('/api/v1/therapists/connection-codes')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({ duration_hours: 24, max_uses: 5 });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.code).toMatch(/^TH-/);
+    expect(typeof res.body.expires_at).toBe('string');
+    expect(new Date(res.body.expires_at).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  test('POST with patient_name returns success and persists the name in the BD row', async () => {
+    const res = await request(app)
+      .post('/api/v1/therapists/connection-codes')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({ duration_hours: 24, max_uses: 1, patient_name: 'Ana Test' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.patient_name).toBe('Ana Test');
+
+    const { rows } = await pool.query(
+      'SELECT patient_name FROM connection_codes WHERE code = $1',
+      [res.body.code]
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].patient_name).toBe('Ana Test');
+  });
+
+  test('POST returns an actionable migration message when patient_name column is missing (SQLSTATE 42703)', async () => {
+    // Simulamos que la migraci\u00f3n 004 nunca se aplic\u00f3: el INSERT lista
+    // patient_name pero la columna no existe. authenticateToken solo
+    // verifica JWT (no toca la BD), as\u00ed que el mock no rompe auth.
+    const spy = jest.spyOn(pool, 'query').mockImplementation(() => {
+      const err = new Error('column "patient_name" of relation "connection_codes" does not exist');
+      err.code = '42703';
+      return Promise.reject(err);
+    });
+    try {
+      const res = await request(app)
+        .post('/api/v1/therapists/connection-codes')
+        .set('Authorization', 'Bearer ' + tToken)
+        .send({ duration_hours: 24, max_uses: 1, patient_name: 'Should Fail' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(false);
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.error).toMatch(/migration 004/i);
+      expect(res.body.error).toMatch(/patient_name/i);
+      // Defensa: NO debe filtrar SQL al frontend
+      expect(res.body.error).not.toMatch(/SELECT|FROM|JOIN|WHERE/i);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('POST returns a retry-able message when DB connection drops (SQLSTATE 08006)', async () => {
+    const spy = jest.spyOn(pool, 'query').mockImplementation(() => {
+      const err = new Error('connection terminated unexpectedly');
+      err.code = '08006';
+      return Promise.reject(err);
+    });
+    try {
+      const res = await request(app)
+        .post('/api/v1/therapists/connection-codes')
+        .set('Authorization', 'Bearer ' + tToken)
+        .send({ duration_hours: 24, max_uses: 1 });
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/conexi|temporal|reintenta|segundos|inmediat/i);
+      // Defensa: NO debe filtrar SQL ni nombres de tabla al frontend
+      expect(res.body.error).not.toMatch(/SELECT|FROM|JOIN|WHERE/i);
+      expect(res.body.error).not.toMatch(/patient_name|connection_codes/i);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('POST returns generic "Error al crear codigo" for unclassified DB errors (no SQL leak)', async () => {
+    const spy = jest.spyOn(pool, 'query').mockImplementation(() => {
+      return Promise.reject(new Error('Some unexpected meltdown mentioned SELECT doctor'));
+    });
+    try {
+      const res = await request(app)
+        .post('/api/v1/therapists/connection-codes')
+        .set('Authorization', 'Bearer ' + tToken)
+        .send({ duration_hours: 24, max_uses: 1 });
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toMatch(/^Error al crear c[oó]digo$/i);
+      // Defensa: NO debe filtrar SQL al frontend
+      expect(res.body.error).not.toMatch(/SELECT|FROM|JOIN|WHERE/i);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('POST returns 401 without a Bearer token', async () => {
+    const res = await request(app)
+      .post('/api/v1/therapists/connection-codes')
+      .send({ duration_hours: 24, max_uses: 1 });
+    expect(res.statusCode).toBe(401);
+  });
+
+  test('POST with invalid validation input returns 400 (validation chain rejects before DB)', async () => {
+    // El middleware validate (express-validator) corre ANTES del handler.
+    // Si devuelve 400, mi catch con SQLSTATE nunca se invoca y la UX
+    // del frontend es "datos inválidos" — no "columna ausente" ni
+    // "BD caída". Este test blinda que esa distinción no se rompa
+    // (p.ej. alguien no mueve la validación al catch y la respuesta
+    // pasa a 500 + success:false con mensaje genérico).
+    const res = await request(app)
+      .post('/api/v1/therapists/connection-codes')
+      .set('Authorization', 'Bearer ' + tToken)
+      .send({ duration_hours: 'abc', max_uses: 1 });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body).toHaveProperty('errors');
+    expect(Array.isArray(res.body.errors)).toBe(true);
+  });
+});

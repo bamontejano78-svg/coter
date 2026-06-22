@@ -651,9 +651,29 @@ async function loadCode(){
 }
 
 async function generateCode(){
-  const r=await api(`${API}/therapists/connection-codes`,{method:'POST',body:JSON.stringify({duration_hours:720,max_uses:5})});const d=await r.json();
-  if(d.success){loadCode();Swal.fire({title:'¡Código generado!',html:`<div class="code-box code-box-popup">${d.code}</div><p class="code-popup-text">Comparte este código con tu paciente</p>`,icon:'success'});}
-  else Swal.fire('Error',d.error||'No se pudo generar el código','error');
+  // try/catch añadido por consistencia con showNewPatient(): antes un
+  // fallo de red o de token-refresh se quedaba como promesa rechazada
+  // sin mensaje visible al usuario. Ahora la UX siempre da feedback
+  // (sea success:false del backend o un error de red puro).
+  try{
+    const r=await api(`${API}/therapists/connection-codes`,{method:'POST',body:JSON.stringify({duration_hours:720,max_uses:5})});
+    const d=await r.json();
+    if(d.success){
+      loadCode();
+      // Invalidate por simetría con showNewPatient(): aunque generar un
+      // código no crea directamente un paciente, cuando el paciente lo
+      // rescate vía /patients/connect aparecerá en la lista activa y el
+      // próximo getPatients volverá con datos frescos.
+      PatientsCache.invalidate();
+      Swal.fire({title:'¡Código generado!',html:`<div class="code-box code-box-popup">${d.code}</div><p class="code-popup-text">Comparte este código con tu paciente</p>`,icon:'success'});
+    } else {
+      console.error('[generateCode] backend error:', d.error);
+      Swal.fire('Error',d.error||'No se pudo generar el código','error');
+    }
+  }catch(e){
+    console.error('[generateCode] fetch falló:', e);
+    Swal.fire('Error','No se pudo conectar con el servidor','error');
+  }
 }
 
 function showNewPatient(){
