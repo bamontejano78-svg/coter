@@ -14,7 +14,7 @@
 <div id="loginScreen" class="login-screen">
 <div class="login-card">
 <h1>Coter Pro</h1>
-<p style="color:#64748b;margin-bottom:28px">Panel del Terapeuta</p>
+<p style="color:var(--muted);font-size:13px;margin-bottom:20px">Panel del terapeuta</p>
 <input type="email" id="loginEmail" placeholder="Email" value="ana@coter.com">
 <input type="password" id="loginPassword" placeholder="Contraseña" value="123456">
 <button data-action="login">Iniciar sesión</button>
@@ -26,24 +26,24 @@
 <div id="registerScreen" class="login-screen hidden">
 <div class="login-card">
 <h1>Coter Pro</h1>
-<p style="color:#64748b;margin-bottom:28px">Registro de Terapeuta</p>
+<p style="color:var(--muted);font-size:13px;margin-bottom:20px">Registro de terapeuta</p>
 <input type="text" id="regName" placeholder="Nombre completo">
 <input type="email" id="regEmail" placeholder="Email">
 <input type="text" id="regSpecialty" placeholder="Especialidad (ej: Psicología clínica)">
 <input type="password" id="regPassword" placeholder="Contraseña (mín. 6 caracteres)">
 <button data-action="register">Crear cuenta</button>
-<button data-action="show-login" style="background:#666;margin-top:8px">Volver al login</button>
+<button class="btn-secondary" data-action="show-login">Volver al login</button>
 </div>
 </div>
 
 <div id="appScreen" class="hidden">
 <div class="sidebar">
-<div class="logo">🧠 Coter Pro</div>
-<div class="nav-item active" data-tab="dashboard">📊 Dashboard</div>
-<div class="nav-item" data-tab="patients">👥 Pacientes</div>
-<div class="nav-item" data-tab="code">🔑 Código de acceso</div>
-<div class="nav-item" data-tab="calendar">📅 Calendario</div>
-<div class="nav-item" data-tab="library">📚 Biblioteca TCC</div>
+<div class="logo">Coter Pro</div>
+<div class="nav-item active" data-tab="dashboard">Dashboard</div>
+<div class="nav-item" data-tab="patients">Pacientes</div>
+<div class="nav-item" data-tab="code">Código de acceso</div>
+<div class="nav-item" data-tab="calendar">Calendario</div>
+<div class="nav-item" data-tab="library">Biblioteca TCC</div>
 <div class="nav-bottom"><button class="btn btn-d" style="width:100%" data-action="logout">Cerrar sesión</button></div>
 </div>
 <div class="main">
@@ -55,18 +55,18 @@
 <div class="stat-card"><div class="stat-num" id="statTasks">-</div><div class="stat-label">Tareas pendientes</div></div>
 <div class="stat-card"><div class="stat-num" id="statRisk" style="color:var(--d)">-</div><div class="stat-label">En riesgo</div></div>
 </div>
-<div class="card"><h2>📈 Tendencia semanal</h2><canvas id="trendChart" height="80"></canvas></div>
-<div class="card"><h2>🕐 Actividad reciente</h2><div id="recentActivity">Cargando...</div></div>
+<div class="card"><h2>Tendencia semanal</h2><canvas id="trendChart" height="80"></canvas></div>
+<div class="card"><h2>Actividad reciente</h2><div id="recentActivity">Cargando...</div></div>
 </div>
 
 <div id="tab-patients" class="tab-content">
-<h1>Pacientes <button class="btn btn-p" data-action="refresh-patients">🔄 Actualizar</button></h1>
+<h1>Pacientes <button class="btn btn-p" data-action="refresh-patients">Actualizar</button></h1>
 <div class="card"><table><thead><tr><th>Paciente</th><th>Conectado</th><th>Último check-in</th><th>Ánimo</th><th>Estado</th><th>Acción</th></tr></thead>
 <tbody id="patientsTableBody"><tr><td colspan="6" style="text-align:center;padding:40px">Cargando...</td></tr></tbody></table></div>
 </div>
 
 <div id="tab-calendar" class="tab-content">
-<h1>📅 Calendario de actividad</h1>
+<h1>Calendario de actividad</h1>
 <div class="card">
 <div class="calendar-nav">
 <button data-action="prev-month">◀</button>
@@ -83,9 +83,9 @@
 </div>
 
 <div id="tab-library" class="tab-content">
-<h1>📚 Biblioteca de tareas TCC <button class="btn btn-w" data-action="create-template" style="font-size:.9rem">➕ Crear plantilla</button></h1>
+<h1>Biblioteca de tareas TCC <button class="btn btn-w" data-action="create-template" style="font-size:13px">Crear plantilla</button></h1>
 <div class="card">
-<input type="text" class="library-search" id="librarySearch" placeholder="🔍 Buscar tarea por título o descripción..." oninput="renderTemplates()">
+<input type="text" class="library-search" id="librarySearch" placeholder="Buscar tarea por título o descripción..." oninput="renderTemplates()">
 <div class="category-filter" id="categoryFilter"></div>
 <div class="library-grid" id="libraryGrid">Cargando biblioteca...</div>
 </div>
@@ -97,8 +97,8 @@
 <h2>Código activo para pacientes</h2>
 <div class="code-box" id="currentCode">Cargando...</div>
 <div style="display:flex;gap:12px;justify-content:center;margin-top:20px">
-<button class="btn btn-s" style="padding:16px 40px;font-size:1.1rem" data-action="gen-code">🎫 Generar código genérico</button>
-<button class="btn btn-p" style="padding:16px 40px;font-size:1.1rem" data-action="new-patient">👤 Nuevo paciente</button>
+<button class="btn btn-s" style="padding:11px 24px;font-size:14px" data-action="gen-code">Generar código genérico</button>
+<button class="btn btn-p" style="padding:11px 24px;font-size:14px" data-action="new-patient">Nuevo paciente</button>
 </div>
 <p style="margin-top:16px;color:#888;font-size:.85rem">Comparte este código con tus pacientes para que se conecten</p>
 </div>
@@ -111,17 +111,17 @@
 <div class="modal-header">
 <h2 id="modalPatientName">Paciente</h2>
 <div style="display:flex;gap:8px">
-<button class="btn btn-w btn-sm" data-action="export-patient">📥 Exportar</button>
-<button class="btn btn-w btn-sm" data-action="disconnect-patient">🚪 Desconectar</button>
-<button class="btn btn-d btn-sm" data-action="close-modal">✕</button>
+<button class="btn btn-w btn-sm" data-action="export-patient">Exportar</button>
+<button class="btn btn-w btn-sm" data-action="disconnect-patient">Desconectar</button>
+<button class="btn btn-d btn-sm" data-action="close-modal">Cerrar</button>
 </div>
 </div>
 <div class="modal-tabs">
-<div class="modal-tab active" data-ptab="ptab-chat">💬 Chat</div>
-<div class="modal-tab" data-ptab="ptab-checkins">📋 Check-ins</div>
-<div class="modal-tab" data-ptab="ptab-tasks">✅ Tareas</div>
-<div class="modal-tab" data-ptab="ptab-goals">🎯 Objetivos</div>
-<div class="modal-tab" data-ptab="ptab-notes">📝 Notas clínicas</div>
+<div class="modal-tab active" data-ptab="ptab-chat">Chat</div>
+<div class="modal-tab" data-ptab="ptab-checkins">Check-ins</div>
+<div class="modal-tab" data-ptab="ptab-tasks">Tareas</div>
+<div class="modal-tab" data-ptab="ptab-goals">Objetivos</div>
+<div class="modal-tab" data-ptab="ptab-notes">Notas clínicas</div>
 </div>
 <div class="modal-body">
 <div id="ptab-chat" class="modal-tab-content active">
