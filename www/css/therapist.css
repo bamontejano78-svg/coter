@@ -41,6 +41,12 @@
 
   --t-fast: .15s ease;
   --t:      .2s ease;
+
+  /* Tipografía: display para títulos/KPI, ui para cuerpo */
+  --font-display: 'Inter Tight', 'Inter', -apple-system, BlinkMacSystemFont,
+                  'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-ui:      'Inter', -apple-system, BlinkMacSystemFont,
+                  'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
 }
 
 /* ─── Subtle animations ────────────────────────────────── */
@@ -64,8 +70,7 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-               'Helvetica Neue', sans-serif;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -96,12 +101,16 @@ body {
 }
 
 .logo {
+  font-family: var(--font-display);
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 18px 20px;
   border-bottom: 1px solid var(--b);
   color: var(--t);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
 }
 
 .logo::before {
@@ -167,13 +176,14 @@ body {
 }
 
 h1 {
-  font-size: 22px;
+  font-family: var(--font-display);
+  font-size: 24px;
   font-weight: 700;
   margin-bottom: 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  letter-spacing: -0.3px;
+  letter-spacing: -0.5px;
   color: var(--t);
   gap: 16px;
 }
@@ -204,10 +214,12 @@ h1 span {
 .stat-card:hover { border-color: #cbd5e1; }
 
 .stat-num {
-  font-size: 26px;
+  font-family: var(--font-display);
+  font-size: 28px;
   font-weight: 700;
   color: var(--p);
-  letter-spacing: -0.5px;
+  letter-spacing: -0.7px;
+  font-variant-numeric: tabular-nums;
   -webkit-background-clip: initial;
   -webkit-text-fill-color: initial;
   background-clip: initial;
@@ -236,14 +248,15 @@ h1 span {
 .card:hover { border-color: #cbd5e1; }
 
 .card h2 {
-  font-size: 15px;
+  font-family: var(--font-display);
+  font-size: 16px;
   font-weight: 600;
   margin-bottom: 16px;
   color: var(--t);
   display: flex;
   align-items: center;
   gap: 8px;
-  letter-spacing: -0.1px;
+  letter-spacing: -0.2px;
 }
 
 /* ─── Tab Content ──────────────────────────────────────── */
@@ -388,10 +401,12 @@ tbody tr:hover { background: var(--g); }
 }
 
 .modal-header h2 {
-  font-size: 15px;
+  font-family: var(--font-display);
+  font-size: 16px;
   font-weight: 600;
   color: var(--t);
   margin: 0;
+  letter-spacing: -0.1px;
 }
 
 .modal-body {
@@ -513,8 +528,10 @@ tbody tr:hover { background: var(--g); }
 .checkin-item:hover { border-color: #cbd5e1; }
 
 .checkin-mood {
-  font-size: 22px;
+  font-family: var(--font-display);
+  font-size: 24px;
   font-weight: 700;
+  letter-spacing: -0.3px;
   min-width: 50px;
   text-align: center;
   color: var(--p);
@@ -687,8 +704,10 @@ tbody tr:hover { background: var(--g); }
 }
 
 .template-title {
-  font-size: 14.5px;
+  font-family: var(--font-display);
+  font-size: 15.5px;
   font-weight: 600;
+  letter-spacing: -0.2px;
   margin-bottom: 6px;
   color: var(--t);
 }
@@ -828,9 +847,11 @@ tbody tr:hover { background: var(--g); }
 }
 
 .login-card h1 {
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-size: 22px;
   font-weight: 700;
   color: var(--t);
+  letter-spacing: -0.3px;
   margin-bottom: 6px;
   display: block;
   justify-content: initial;
@@ -905,8 +926,10 @@ tbody tr:hover { background: var(--g); }
 }
 
 .calendar-nav h2 {
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 17px;
   font-weight: 600;
+  letter-spacing: -0.2px;
   min-width: 160px;
   text-align: center;
   margin: 0;
@@ -1028,8 +1051,10 @@ tbody tr:hover { background: var(--g); }
 }
 
 .calendar-day-panel h3 {
-  font-size: 14px;
+  font-family: var(--font-display);
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.1px;
   margin-bottom: 10px;
   color: var(--t);
   text-transform: capitalize;

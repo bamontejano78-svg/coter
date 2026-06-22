@@ -32,6 +32,12 @@
 
   --t-fast: .15s ease;
   --t:      .2s ease;
+
+  /* Tipografía: display para títulos/KPI, ui para cuerpo */
+  --font-display: 'Inter Tight', 'Inter', -apple-system, BlinkMacSystemFont,
+                  'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-ui:      'Inter', -apple-system, BlinkMacSystemFont,
+                  'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
 }
 
 /* ─── Reset ────────────────────────────────────────────── */
@@ -46,8 +52,7 @@
 html, body { height: 100%; }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-               'Helvetica Neue', sans-serif;
+  font-family: var(--font-ui);
   background: var(--bg-soft);
   color: var(--ink-900);
   min-height: 100vh;
@@ -109,10 +114,12 @@ body {
 }
 
 .brand-name {
-  font-size: 15px;
+  font-family: var(--font-display);
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: -0.1px;
+  letter-spacing: -0.2px;
   color: var(--ink-900);
+  font-feature-settings: "liga" 0, "dlig" 0;
 }
 
 .brand-tagline {
@@ -123,11 +130,13 @@ body {
 
 /* ─── Prompt ──────────────────────────────────────────── */
 .prompt {
-  font-size: 22px;
+  font-family: var(--font-display);
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.6px;
   color: var(--ink-900);
   margin-bottom: 4px;
+  font-feature-settings: "liga" 0, "dlig" 0;
 }
 
 .prompt-sub {
@@ -190,11 +199,12 @@ body {
 .role-card.role-therapist .role-kicker{ color: var(--success); }
 
 .role-title {
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 17px;
   font-weight: 600;
   color: var(--ink-900);
   margin-top: 4px;
-  letter-spacing: -0.1px;
+  letter-spacing: -0.2px;
 }
 
 .role-desc {
