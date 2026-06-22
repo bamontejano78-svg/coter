@@ -11,36 +11,6 @@ let templates=[],templateCategories=[],activeCategory=null;
 let isRefreshing=false;
 let refreshPromise=null;
 
-// ─── CACHE DE PACIENTES ───────────────────────────────────────
-// Usado al asignar plantillas desde la biblioteca. Distingue entre
-// "0 pacientes reales" y "error al cargar" — antes un catch silencioso
-// mostraba el mensaje falso "no tienes pacientes" incluso cuando el
-// fetch fallaba por red o token.
-let patientsCache=null;
-let patientsCacheAt=0;
-const PATIENTS_CACHE_TTL=30000; // 30s
-
-async function getPatients({force=false}={}){
-  const now=Date.now();
-  if(!force&&patientsCache!==null&&(now-patientsCacheAt)<PATIENTS_CACHE_TTL){
-    return patientsCache;
-  }
-  const r=await api(`${API}/therapists/patients`);
-  const d=await r.json();
-  patientsCacheAt=now;
-  if(!d.success){
-    patientsCache=null;
-    throw new Error(d.error||'Servidor respondió success=false');
-  }
-  patientsCache=d.patients||[];
-  return patientsCache;
-}
-
-function invalidatePatientsCache(){
-  patientsCache=null;
-  patientsCacheAt=0;
-}
-
 // ═══════════════════════════════════════════════════════════
 // ANIMACIONES Y MICRO-INTERACCIONES
 // ═══════════════════════════════════════════════════════════
@@ -221,6 +191,13 @@ async function api(url,opts={}){
   return r;
 }
 
+// Inicializar el cache centralizado de /therapists/patients. Cualquier script
+// que llame a GET /api/v1/therapists/patients debe pasar por window.PatientsCache
+// (definido en www/js/patients-cache.js, cargado antes que therapist.js en
+// terapeuta.html). Lo inicializamos aquí con el wrapper `api()` que ya tiene
+// auto-refresh de token integrado.
+try { PatientsCache.init({ API, api }); } catch (e) { console.warn('[therapist.js] PatientsCache.init falló', e); }
+
 function showApp(){
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('registerScreen').classList.add('hidden');
@@ -258,7 +235,7 @@ function updateTrendChart(data){
 
 async function loadPatients({force=false}={}){
   try{
-    const patients=await getPatients({force});
+    const patients=await PatientsCache.getPatients({force});
     const tbody=document.getElementById('patientsTableBody');
     if(!patients.length){tbody.innerHTML='<tr><td colspan="6" class="empty-cell">No tienes pacientes aún</td></tr>';return;}
     tbody.innerHTML=patients.map(p=>{
@@ -513,7 +490,7 @@ async function assignTemplateToPatient(templateId){
   let patients=[];
   let fetchError=null;
   try{
-    patients=await getPatients();
+    patients=await PatientsCache.getPatients();
   }catch(e){
     fetchError=e;
     console.error('[assignTemplateToPatient] fetch /therapists/patients falló:',e);
@@ -529,7 +506,7 @@ async function assignTemplateToPatient(templateId){
       cancelButtonText:'Cancelar'
     });
     if(!retry.isConfirmed)return;
-    invalidatePatientsCache();
+    PatientsCache.invalidate();
     return assignTemplateToPatient(templateId);
   }
 
@@ -645,7 +622,7 @@ async function disconnectPatient(){
   if(!result.isConfirmed)return;
   try{
     await api(`${API}/therapists/patients/${currentPatientId}/connections`,{method:'DELETE',body:JSON.stringify({reason:(result.value||'').trim()})});
-    invalidatePatientsCache();
+    PatientsCache.invalidate();
     closePatientModal();
     await loadPatients({force:true});
     Swal.fire({title:'Paciente desconectado',text:`${sanitizeHTML(patientName)} ya no aparece en tu lista activa`,icon:'success',timer:1800,showConfirmButton:false});
@@ -686,7 +663,7 @@ function showNewPatient(){
     try{
       const r=await api(`${API}/therapists/connection-codes`,{method:'POST',body:JSON.stringify({duration_hours:720,max_uses:1,patient_name:name})});
       const d=await r.json();
-      if(d.success){loadCode();invalidatePatientsCache();Swal.fire({title:'¡Código creado!',html:`<h3 class="code-popup-name">${name}</h3><div class="code-box code-box-popup">${d.code}</div><p class="code-popup-text">Comparte este código exclusivo con ${name.split(' ')[0]}</p>`,icon:'success'});}
+      if(d.success){loadCode();PatientsCache.invalidate();Swal.fire({title:'¡Código creado!',html:`<h3 class="code-popup-name">${name}</h3><div class="code-box code-box-popup">${d.code}</div><p class="code-popup-text">Comparte este código exclusivo con ${name.split(' ')[0]}</p>`,icon:'success'});}
       else Swal.fire('Error',d.error||'No se pudo crear el código','error');
     }catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
   }});
