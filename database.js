@@ -87,7 +87,13 @@ async function runMigrations() {
 
     try {
       await p.query(sql);
-      await p.query('INSERT INTO _migrations (name) VALUES ($1)', [fileName]);
+      try {
+        await p.query('INSERT INTO _migrations (name) VALUES ($1)', [fileName]);
+      } catch (e) {
+        // 23505 = unique_violation: otro worker ya aplicó la migración (rolling deploy).
+        // El propio ALTER ADD COLUMN IF NOT EXISTS ya es idempotente, así que es seguro.
+        if (e.code !== '23505') throw e;
+      }
       logger.info('Migracion aplicada: ' + fileName);
     } catch (err) {
       logger.error('Error aplicando migracion ' + fileName, { error: err.message });

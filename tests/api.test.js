@@ -150,10 +150,6 @@ describe('Patient API', () => {
       .set('Authorization', 'Bearer ' + therapistToken)
       .send({ duration_hours: 24, max_uses: 1 });
     connectionCode = codeRes.body.code;
-    // Validar que el endpoint devuelve expires_at en formato ISO (regression fix)
-    expect(codeRes.body.success).toBe(true);
-    expect(typeof codeRes.body.expires_at).toBe('string');
-    expect(new Date(codeRes.body.expires_at).getTime()).toBeGreaterThan(Date.now());
 
     // 3. Conectar como paciente
     const connectRes = await request(app)
@@ -169,6 +165,17 @@ describe('Patient API', () => {
       expect(patientId).toBeDefined();
       expect(authToken).toBeDefined();
       expect(connectionCode).toBeDefined();
+    });
+
+    test('POST /connection-codes returns ISO expires_at in the future', async () => {
+      const res = await request(app)
+        .post('/api/v1/therapists/connection-codes')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({ duration_hours: 24, max_uses: 1 });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(typeof res.body.expires_at).toBe('string');
+      expect(new Date(res.body.expires_at).getTime()).toBeGreaterThan(Date.now());
     });
 
     // Regression: cubre el path con patient_name que estaba roto en producción
