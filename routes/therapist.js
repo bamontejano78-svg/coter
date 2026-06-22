@@ -284,14 +284,18 @@ router.post('/connection-codes', authenticateToken, [
     const code = generateConnectionCode();
     const id = uuidv4();
     const pool = getPool();
+    // expiresAt se calcula en JS (consistente con createRefreshToken) para
+    // evitar cualquier ambigüedad de tipos en SQL (integer || text no existe
+    // como operador en PostgreSQL y casos similares ya nos han mordido).
+    const expiresAt = new Date(Date.now() + duration_hours * 3600 * 1000);
 
     await pool.query(
       `INSERT INTO connection_codes (id, therapist_id, code, duration_hours, max_uses, uses, expires_at, patient_name)
-       VALUES ($1, $2, $3, $4, $5, 0, NOW() + ($4 || ' hours')::INTERVAL, $6)`,
-      [id, req.user.id, code, duration_hours, max_uses, patient_name || null]
+       VALUES ($1, $2, $3, $4, $5, 0, $6, $7)`,
+      [id, req.user.id, code, duration_hours, max_uses, expiresAt, patient_name || null]
     );
 
-    res.json({ success: true, code, expires_in_hours: duration_hours, max_uses, patient_name: patient_name || null });
+    res.json({ success: true, code, expires_in_hours: duration_hours, expires_at: expiresAt.toISOString(), max_uses, patient_name: patient_name || null });
   } catch (err) {
     logger.error('Error creando codigo', { error: err.message });
     res.json({ success: false, error: 'Error al crear codigo' });

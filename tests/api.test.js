@@ -150,6 +150,10 @@ describe('Patient API', () => {
       .set('Authorization', 'Bearer ' + therapistToken)
       .send({ duration_hours: 24, max_uses: 1 });
     connectionCode = codeRes.body.code;
+    // Validar que el endpoint devuelve expires_at en formato ISO (regression fix)
+    expect(codeRes.body.success).toBe(true);
+    expect(typeof codeRes.body.expires_at).toBe('string');
+    expect(new Date(codeRes.body.expires_at).getTime()).toBeGreaterThan(Date.now());
 
     // 3. Conectar como paciente
     const connectRes = await request(app)
@@ -165,6 +169,25 @@ describe('Patient API', () => {
       expect(patientId).toBeDefined();
       expect(authToken).toBeDefined();
       expect(connectionCode).toBeDefined();
+    });
+
+    // Regression: cubre el path con patient_name que estaba roto en producción
+    test('POST /api/v1/therapists/connection-codes accepts patient_name', async () => {
+      const res = await request(app)
+        .post('/api/v1/therapists/connection-codes')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({ duration_hours: 24, max_uses: 1, patient_name: 'Paciente Test' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.code).toMatch(/^TH-/);
+      expect(res.body.patient_name).toBe('Paciente Test');
+      // Verificar que el código se guardó con patient_name en BD
+      const { rows } = await pool.query(
+        'SELECT patient_name FROM connection_codes WHERE code = $1',
+        [res.body.code]
+      );
+      expect(rows.length).toBe(1);
+      expect(rows[0].patient_name).toBe('Paciente Test');
     });
 
     test('POST /api/v1/patients/connect rejects empty code', async () => {
