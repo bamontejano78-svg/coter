@@ -915,7 +915,7 @@ function loadCalendar(){
   const monthStr=`${calendarYear}-${String(calendarMonth+1).padStart(2,'0')}`;
   document.getElementById('calendarMonthLabel').textContent=new Date(calendarYear,calendarMonth).toLocaleDateString('es-ES',{month:'long',year:'numeric'});
   api(`${API}/therapists/calendar?month=${monthStr}`).then(r=>r.json()).then(d=>{
-    if(d.success){calendarData=d.dates||{};renderCalendar();}
+    if(d.success){calendarData=d.dates||{};renderCalendar();renderAgenda();}
   }).catch(e=>{document.getElementById('calendarGrid').innerHTML='<p class="empty-msg error">Error al cargar calendario</p>';});
 }
 function prevMonth(){calendarMonth--;if(calendarMonth<0){calendarMonth=11;calendarYear--;}loadCalendar();hideDayPanel();}
@@ -977,8 +977,141 @@ function selectCalendarDay(dateStr){
     const badge=t.status==='completed'?'✅':isOverdue?'⚠️ Vencida':t.due_date?'⏳ Pendiente':'📌 Asignada';
     return`<div class="calendar-event ${cls}"><span class="cal-emoji">${isOverdue?'⚠️':'📋'}</span><div><strong>${sanitizeHTML(t.title)}</strong> <span class="cal-badge">${badge}</span><br><small>${sanitizeHTML(t.patient_name)}${t.due_date?` · Vence: ${new Date(t.due_date).toLocaleDateString('es-ES')}`:''}</small></div></div>`;
   }).join('');
+  html+=`<button class="cal-assign-btn" data-action="cal-assign-task" data-date="${dateStr}">+ Asignar tarea</button>`;
   document.getElementById('calendarDayContent').innerHTML=html;
   panel.classList.remove('hidden');
+}
+
+// ==================== AGENDA DEL DÍA ====================
+function renderAgenda(){
+  const todayStr=new Date().toISOString().slice(0,10);
+  const todayData=calendarData[todayStr]||{checkins:[],tasks:[]};
+  const todayCheckins=todayData.checkins||[];
+  const todayTasks=todayData.tasks||[];
+
+  // — Agenda de hoy —
+  const todayEl=document.getElementById('agendaToday');
+  let todayHtml='';
+
+  if(todayCheckins.length){
+    todayHtml+=`<div class="agenda-section-title">Check-ins (${todayCheckins.length})</div>`;
+    todayCheckins.forEach((c,i)=>{
+      const moodIcon=c.mood<=3?'😔':c.mood>=7?'😊':'😐';
+      todayHtml+=`<div class="agenda-item" style="animation-delay:${i*40}ms"><span class="agenda-item-icon">${moodIcon}</span><div class="agenda-item-body"><div class="agenda-item-title">${sanitizeHTML(c.patient_name)}</div><div class="agenda-item-meta">Ánimo ${c.mood}/10 · Ansiedad ${c.anxiety}/10</div></div></div>`;
+    });
+  }
+
+  if(todayTasks.length){
+    todayHtml+=`<div class="agenda-section-title">Tareas (${todayTasks.length})</div>`;
+    todayTasks.forEach((t,i)=>{
+      const done=t.status==='completed';
+      const icon=done?'✅':'📋';
+      todayHtml+=`<div class="agenda-item" style="animation-delay:${(todayCheckins.length+i)*40}ms"><span class="agenda-item-icon">${icon}</span><div class="agenda-item-body"><div class="agenda-item-title">${sanitizeHTML(t.title)}</div><div class="agenda-item-meta">${sanitizeHTML(t.patient_name)}${done?' · Completada':''}</div></div></div>`;
+    });
+  }
+
+  if(!todayCheckins.length&&!todayTasks.length){
+    todayHtml='<div class="agenda-empty">Sin actividad registrada hoy</div>';
+  }
+  todayEl.innerHTML=todayHtml;
+
+  // — Próximos 7 días —
+  const upcomingEl=document.getElementById('agendaUpcoming');
+  let upHtml='';
+  const now=new Date();now.setHours(0,0,0,0);
+  const upcomingItems=[];
+
+  for(let d=1;d<=7;d++){
+    const dt=new Date(now);dt.setDate(dt.getDate()+d);
+    const ds=dt.toISOString().slice(0,10);
+    const dd=calendarData[ds]||{checkins:[],tasks:[]};
+    (dd.tasks||[]).forEach(t=>{
+      if(t.status!=='completed'&&t.due_date){
+        upcomingItems.push({...t,_date:ds,_dateLabel:dt.toLocaleDateString('es-ES',{weekday:'short',day:'numeric',month:'short'})});
+      }
+    });
+  }
+
+  // Also include overdue tasks from past days (still assigned)
+  Object.keys(calendarData).forEach(ds=>{
+    if(ds>=todayStr)return;
+    const dd=calendarData[ds]||{tasks:[]};
+    (dd.tasks||[]).forEach(t=>{
+      if(t.status!=='completed'&&t.due_date&&t.due_date.slice(0,10)===ds){
+        const already=upcomingItems.some(u=>u.id===t.id);
+        if(!already) upcomingItems.push({...t,_date:ds,_dateLabel:'Vencida',_overdue:true});
+      }
+    });
+  });
+
+  if(upcomingItems.length){
+    upcomingItems.forEach((t,i)=>{
+      const badgeClass=t._overdue?'overdue':'';
+      upHtml+=`<div class="agenda-item" style="animation-delay:${i*40}ms"><span class="agenda-item-icon">📋</span><div class="agenda-item-body"><div class="agenda-item-title">${sanitizeHTML(t.title)}</div><div class="agenda-item-meta">${sanitizeHTML(t.patient_name)}</div></div><span class="agenda-date-badge ${badgeClass}">${t._dateLabel}</span></div>`;
+    });
+  }else{
+    upHtml='<div class="agenda-empty">Sin tareas próximas</div>';
+  }
+  upcomingEl.innerHTML=upHtml;
+}
+
+// ==================== CREAR TAREA DESDE CALENDARIO ====================
+async function showCalendarAssignTask(dateStr){
+  let patients=[];
+  try{
+    patients=await PatientsCache.getPatients();
+  }catch(e){
+    console.error('[showCalendarAssignTask] fetch patients falló:',e);
+  }
+  if(!patients.length){
+    return Swal.fire({title:'Sin pacientes',text:'No tienes pacientes conectados.',icon:'info'});
+  }
+  const patientOpts={};
+  patients.forEach(p=>{patientOpts[p.id]=p.name||'Anónimo (ID:'+p.id.slice(0,8)+')';});
+
+  const dateDisplay=new Date(dateStr+'T00:00:00').toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  Swal.fire({
+    title:'Asignar tarea',
+    html:`
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px">Fecha de vencimiento: <strong>${dateDisplay}</strong></p>
+      <label class="soap-label">Paciente</label>
+      <select id="swalCalPatient" class="swal2-input"></select>
+      <label class="soap-label">Título</label>
+      <input id="swalCalTitle" class="swal2-input" placeholder="Título de la tarea">
+      <label class="soap-label">Tipo</label>
+      <input id="swalCalType" class="swal2-input" placeholder="Ej: ejercicio, lectura, registro">
+      <label class="soap-label">Instrucciones</label>
+      <textarea id="swalCalInstructions" class="swal2-textarea" placeholder="Instrucciones detalladas para el paciente..." rows="3"></textarea>
+    `,
+    showCancelButton:true,
+    confirmButtonText:'Asignar tarea',
+    cancelButtonText:'Cancelar',
+    width:520,
+    didOpen:()=>{
+      const sel=document.getElementById('swalCalPatient');
+      Object.entries(patientOpts).forEach(([id,name])=>{
+        const opt=document.createElement('option');opt.value=id;opt.textContent=name;sel.appendChild(opt);
+      });
+    },
+    preConfirm:async()=>{
+      const patientId=document.getElementById('swalCalPatient').value;
+      const title=document.getElementById('swalCalTitle').value.trim();
+      const type=document.getElementById('swalCalType').value.trim();
+      const instructions=document.getElementById('swalCalInstructions').value.trim();
+      if(!patientId||!title||!type||!instructions){Swal.showValidationMessage('Completa todos los campos');return false;}
+      try{
+        await api(`${API}/therapists/patients/${patientId}/assignments`,{method:'POST',body:JSON.stringify({title,type,instructions,due_date:dateStr})});
+        // Refresh calendar data so the new task appears
+        loadCalendar();
+      }catch(e){
+        Swal.showValidationMessage('Error al asignar la tarea');
+        return false;
+      }
+    }
+  }).then(r=>{
+    if(r.isConfirmed) showToast('✅ Tarea asignada para '+dateDisplay,'success');
+  });
 }
 
 // ==================== EVENT DELEGATION ====================
@@ -1007,6 +1140,7 @@ document.addEventListener('click', function(e){
       case 'prev-month': prevMonth(); break;
       case 'next-month': nextMonth(); break;
       case 'go-today': goToToday(); break;
+      case 'cal-assign-task': showCalendarAssignTask(btn.dataset.date); break;
       default: console.warn('Unknown data-action:', action);
     }
     return;
