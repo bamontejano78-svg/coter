@@ -12,6 +12,12 @@ const logger = require('../config/logger');
 const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
 const { createNotification } = require('../utils/notifications');
 const { audit, auditAccess, auditChange } = require('../utils/audit');
+const bus = require('../utils/eventBus');
+// Helpers de ejercicios clínicos compartidos con routes/patients.js. Los
+// usamos para enriquecer el GET /patients/:patientId con `latest_session`
+// ya mergeada, de modo que el cliente del terapeuta pueda abrir el panel
+// "Ver respuestas" sin un round-trip extra.
+const { fetchLatestSessionsForAssignments, decodeSessionResponses, schemaForAssignment } = require('../utils/exerciseHelpers');
 
 // ─── Email transporter (lazy init) ──────────────────────────────
 let mailTransporter = null;
@@ -448,6 +454,16 @@ router.delete('/patients/:patientId/connections', authenticateToken, async (req,
       logger.warn('No se pudo notificar al paciente tras disconnect', { error: notifErr.message, patientId });
     }
 
+    // El paciente debe ver "tu terapeuta terminó la conexión" sin reabrir la
+    // app. notification:new lo entrega createNotification arriba; aquí emitimos
+    // connection:terminated para que el cliente pueda diferenciar este caso
+    // (ej: mostrar un modal persistente "coneión finalizada" además del toast).
+    bus.publish(bus.topicFor('patient', patientId), 'connection:terminated', { patientId });
+
+    // El propio terapeuta también debe enterarse en sus pestañas abiertas
+    // (multipestaña). listener del frontend -> cerrar modal y refrescar lista.
+    bus.publish(bus.topicFor('therapist', req.user.id), 'connection:terminated', { patientId, by: 'self' });
+
     auditChange(req, 'disconnect_patient', 'therapist_patient', linkRows[0].id, {
       patientId,
       reason: reason ? String(reason).slice(0, 500) : null,
@@ -487,9 +503,38 @@ router.get('/patients/:patientId', authenticateToken, async (req, res) => {
     const patient = patientRows[0];
     const metrics = calculateMetrics(checkIns);
 
+    // Enriquece assignments con la última sesión clínica (mergeada: sensibles
+    // descifrados del blob + no sensibles del JSONB), para que el frontend
+    // del terapeuta pueda mostrar el panel "Ver respuestas" inline sin pedir
+    // un round-trip adicional. Para assignments sin sesión o de kind 'classic'
+    // el campo queda explícitamente en null (criterio uniforme del contrato).
+    const decryptedAssignments = decryptAssignments(assignments);
+    const latestByAssignment = await fetchLatestSessionsForAssignments(pool, patientId, decryptedAssignments);
+    const enrichedAssignments = decryptedAssignments.map(a => {
+      // Pre-resolver el schema efectivo (incluye variante mode/phobia) para
+      // que el frontend del terapeuta pueda pintar respuestas estructuradas
+      // sin conocer las discriminantes internas del backend.
+      const resolvedSchema = schemaForAssignment(a) || a.exercise_schema || null;
+      const sess = latestByAssignment.get(a.id);
+      if (!sess) return { ...a, exercise_schema: resolvedSchema, latest_session: null };
+      return {
+        ...a,
+        exercise_schema: resolvedSchema,
+        latest_session: {
+          id: sess.id,
+          exercise_kind: sess.exercise_kind,
+          is_complete: sess.is_complete,
+          started_at: sess.started_at,
+          updated_at: sess.updated_at,
+          completed_at: sess.completed_at,
+          responses: decodeSessionResponses(sess, a),
+        },
+      };
+    });
+
     res.json({
       success: true,
-      patient: { ...patient, checkIns: decryptCheckIns(checkIns), messages: decryptMessages(messages), assignments: decryptAssignments(assignments), goals, metrics },
+      patient: { ...patient, checkIns: decryptCheckIns(checkIns), messages: decryptMessages(messages), assignments: enrichedAssignments, goals, metrics },
     });
   } catch (err) {
     logger.error('Error perfil paciente', { error: err.message });
@@ -514,9 +559,26 @@ router.post('/patients/:patientId/messages', authenticateToken, async (req, res)
     );
 
     const preview = message.trim().length > 80 ? message.trim().substring(0, 80) + '...' : message.trim();
-    createNotification(pool, patientId, 'message', 'Nuevo mensaje de tu terapeuta', preview, msgId);
-
+    // createNotification ahora es awaitable: el INSERT y el bus.publish
+    // se confirman antes de que el terapeuta reciba el res.json. Antes era
+    // fire-and-forget y el test que cuenta notifications del paciente justo
+    // despues del POST /messages hacia una carrera: el INSERT podia no estar
+    // commiteado cuando el siguiente GET /notifications ya se ejecutaba. Hoy
+    // el orden a)INSERT b)bus.publish c)res.json es estricto desde la BD.
+    await createNotification(pool, patientId, 'message', 'Nuevo mensaje de tu terapeuta', preview, msgId);
     auditChange(req, 'send_message', 'message', msgId, { patientId });
+
+    // Publicar al propio terapeuta (multipestaña/modal abierto) y al paciente.
+    // La notificación system del paciente ya es entregada por createNotification;
+    // aquí emitimos adicionalmente `message:new` para cualquier handler que
+    // escuche el chat del paciente (badge de mensajes no leídos en tiempo real).
+    bus.publish(bus.topicFor('therapist', req.user.id), 'message:new', {
+      patientId, messageId: msgId, from: 'therapist',
+    });
+    bus.publish(bus.topicFor('patient', patientId), 'message:new', {
+      patientId, messageId: msgId, from: 'therapist',
+    });
+
     res.json({ success: true, message_id: msgId });
   } catch (err) {
     logger.error('Error enviando mensaje', { error: err.message });
@@ -541,7 +603,15 @@ router.post('/patients/:patientId/assignments', authenticateToken, async (req, r
     auditChange(req, 'create_assignment', 'assignment', assignId, { patientId, type, title });
 
     const dueMsg = due_date ? ' (vence: ' + new Date(due_date).toLocaleDateString('es-ES') + ')' : '';
-    createNotification(pool, patientId, 'assignment', 'Nueva tarea asignada', '"' + title + '"' + dueMsg, assignId);
+    // await: ver comentario en POST /patients/:id/messages arriba. La unica
+    // diferencia entre rutas aca es que assignment crea ademas un
+    // bus.publish('task:assigned'); ambos quedan ahora garantizados en orden
+    // respecto al res.json.
+    await createNotification(pool, patientId, 'assignment', 'Nueva tarea asignada', '"' + title + '"' + dueMsg, assignId);
+
+    bus.publish(bus.topicFor('patient', patientId), 'task:assigned', {
+      patientId, assignmentId: assignId, title, type, due_date: due_date || null,
+    });
 
     res.json({ success: true, assignment_id: assignId });
   } catch (err) {
@@ -582,7 +652,11 @@ router.post('/patients/:patientId/goals', authenticateToken, async (req, res) =>
     );
 
     auditChange(req, 'create_goal', 'goal', goalId, { patientId, title, metric, target_value });
-    createNotification(pool, patientId, 'goal', 'Nuevo objetivo', '"' + title + '" - Meta: ' + target_value + ' (' + duration_days + ' dias)', goalId);
+    // await: ver comentario en POST /patients/:id/messages.
+    await createNotification(pool, patientId, 'goal', 'Nuevo objetivo', '"' + title + '" - Meta: ' + target_value + ' (' + duration_days + ' dias)', goalId);
+
+    bus.publish(bus.topicFor('patient', patientId), 'goal:new', { patientId, goalId, title, metric, target_value, duration_days });
+
     res.json({ success: true, goal_id: goalId });
   } catch (err) {
     logger.error('Error creando objetivo', { error: err.message });
@@ -603,14 +677,21 @@ router.put('/patients/:patientId/goals/:goalId', authenticateToken, async (req, 
         const goal = goalRows[0];
         const pct = Math.round((current_value / goal.target_value) * 100);
         const msg = pct >= 100 ? 'Objetivo completado!' : 'Progreso: ' + current_value + '/' + goal.target_value + ' (' + pct + '%)';
-        createNotification(pool, patientId, 'goal', 'Actualizacion de objetivo', '"' + goal.title + '" - ' + msg, goalId);
+        // await: ver comentario en POST /patients/:id/messages. Solo emite
+        // notification cuando current_value != undefined y la meta existe;
+        // si falla el INSERT, createNotification lo loggea y retorna null,
+        // pero el UPDATE del goal ya commiteo antes — eso es deseable: la
+        // notificacion es best-effort mientras el progreso del goal es
+        // siempre durable.
+        await createNotification(pool, patientId, 'goal', 'Actualizacion de objetivo', '"' + goal.title + '" - ' + msg, goalId);
       }
     } else if (status) {
       await pool.query('UPDATE goals SET status = $1 WHERE id = $2 AND patient_id = $3', [status, goalId, patientId]);
       if (status === 'completed') {
         const { rows: goalRows } = await pool.query('SELECT title FROM goals WHERE id = $1', [goalId]);
         if (goalRows.length > 0) {
-          createNotification(pool, patientId, 'goal', 'Objetivo completado', 'Felicidades! Alcanzaste "' + goalRows[0].title + '"', goalId);
+          // await: ver comentario en POST /patients/:id/messages.
+          await createNotification(pool, patientId, 'goal', 'Objetivo completado', 'Felicidades! Alcanzaste "' + goalRows[0].title + '"', goalId);
         }
       }
     }
@@ -708,6 +789,13 @@ router.post('/patients/:patientId/clinical-notes', authenticateToken, async (req
     );
     const { rows: noteRows } = await pool.query('SELECT * FROM clinical_notes WHERE id = $1', [id]);
     auditChange(req, 'create_clinical_note', 'clinical_note', id, { patientId });
+
+    // Las notas SOAP son internas del terapeuta (no se notifican al paciente
+    // hasta que decidas exponer una versión "amigable" como propusimos en la
+    // lista de features). Solo emitimos al propio terapeuta para sincronizar
+    // pestañas (e.g. un modal abierto mostrando notas).
+    bus.publish(bus.topicFor('therapist', req.user.id), 'note:created', { patientId, noteId: id });
+
     res.json({ success: true, note: noteRows[0] });
   } catch (err) {
     logger.error('Error creando nota', { error: err.message });

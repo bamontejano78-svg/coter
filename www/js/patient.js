@@ -8,6 +8,9 @@
 const isLocalDev = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.protocol === 'http:';
 const API = isLocalDev ? 'http://localhost:3000/api/v1' : '/api/v1';
 let patientId=null,patientData=null,moodChart=null,authToken=null;
+let sseConnection=null;
+let sseReconnectTimer=null;
+let sseBackoffMs=0;
 
 // ═══════════════════════════════════════════════════════════
 // ANIMACIONES Y MICRO-INTERACCIONES
@@ -69,10 +72,130 @@ function showMainScreen(){
 
 async function loadEverything(){
   loadMessages();loadTasks();loadGoals();loadStats();loadNotifications();loadProgress();
-  setInterval(loadMessages,4000);
+  // Polling lento solo para stats y progreso (visual; los mensajes y notificaciones
+  // llegan por SSE en tiempo real — ver connectSSE). El dashboard del paciente es
+  // mayormente estático y un refresco cada 30s es suficiente para mantener
+  // streak/contadores al día cuando no entran eventos SSE.
   setInterval(loadStats,30000);
-  setInterval(loadNotifications,15000);
   setInterval(loadProgress,60000);
+  connectSSE();
+}
+
+// ─── SSE — Real-time stream ───────────────────────────────────────────
+//
+// Sustituye el polling de mensajes (4s) y notificaciones (15s) por un único
+// stream abierto que nos entrega eventos del terapeuta en milisegundos.
+//
+// Auth pattern (defendido en utils/eventBus.js + routes/events.js):
+//  • POST /events/ticket/patient/:patientId con el auth_token en header → ticket
+//  • GET /events?ticket=UUID → stream SSE (el token NUNCA va en la URL).
+//
+// Reconexión: EventSource reconecta solo en errores transitorios (3s por
+// defecto del navegador). Pero si el backend rechaza el ticket, el navegador
+// NO reconecta, así que necesitamos un loop manual con backoff exponencial
+// para el caso "auth del ticket falló".
+function disconnectSSE() {
+  if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer=null; }
+  if (sseConnection) { try { sseConnection.close(); } catch(e){} sseConnection=null; }
+  sseBackoffMs = 0;
+}
+
+async function connectSSE() {
+  if (!patientId || !authToken) return;
+  disconnectSSE();
+  try {
+    // 1) Pedir un ticket de un solo uso al backend (auth normal con Bearer)
+    const r = await fetch(API + '/events/ticket/patient/' + patientId, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + authToken }
+    });
+    const d = await r.json();
+    if (!d || !d.success || !d.ticket) {
+      // Si falla el ticket, no es un error fatal: los 4 endpoints REST siguen
+      // funcionando. Volvemos a intentar con backoff para no spammear.
+      scheduleSSEReconnect();
+      return;
+    }
+    // 2) Abrir el stream. Nótese: el ticket viaja en query pero es efímero.
+    sseConnection = new EventSource(API + '/events?ticket=' + encodeURIComponent(d.ticket));
+    sseBackoffMs = 0; // éxito → resetea el backoff
+
+    sseConnection.addEventListener('connected', () => {
+      // Handshake recibido. Re-fetch mensajes y notificaciones por si el SSE
+      // quedó caído durante un rato y entramos a la conexión sin historial.
+      loadMessages();
+      loadNotifications();
+    });
+
+    sseConnection.onmessage = (ev) => {
+      let payload;
+      try { payload = JSON.parse(ev.data); } catch (e) { return; }
+      handleSSEEvent(payload);
+    };
+
+    sseConnection.onerror = () => {
+      // EventSource ya intenta reconectar solo (3s). No hace falta hacer nada.
+      // Si el ticket fue rechazado por el servidor (401), EventSource NO
+      // reconecta y entra en loop de errores. En ese caso el listener queda
+      // muerto y necesitamos reabrir la conexión desde cero con un ticket
+      // nuevo. Detectamos el caso via readyState=CLOSED.
+      if (!sseConnection) return;
+      if (sseConnection.readyState === EventSource.CLOSED) {
+        sseConnection.close();
+        sseConnection = null;
+        scheduleSSEReconnect();
+      }
+    };
+  } catch (e) {
+    console.warn('[SSE] connect failed:', e);
+    scheduleSSEReconnect();
+  }
+}
+
+function scheduleSSEReconnect() {
+  if (sseReconnectTimer) return; // ya programado
+  sseBackoffMs = sseBackoffMs ? Math.min(sseBackoffMs * 2, 30000) : 2000;
+  sseReconnectTimer = setTimeout(() => { sseReconnectTimer=null; connectSSE(); }, sseBackoffMs);
+}
+
+function handleSSEEvent(payload) {
+  const type = payload && payload.type;
+  const data = (payload && payload.data) || {};
+  if (!type) return;
+  switch (type) {
+    case 'message:new':
+      // El terapeuta envió un mensaje o nosotros mismos en otra pestaña.
+      loadMessages();
+      if (data.from === 'therapist') {
+        toastMsg('💬 Nuevo mensaje de tu terapeuta');
+      }
+      break;
+    case 'notification:new':
+      // Cualquier notificación — refresca lista y badge; toast sólo si es del
+      // terapeuta o del sistema, no si es un reminder de tarea propia.
+      loadNotifications();
+      if (data.type && ['message', 'assignment', 'goal', 'system'].indexOf(data.type) !== -1) {
+        toastMsg('🔔 ' + (data.title || 'Nueva notificación'));
+      }
+      break;
+    case 'task:assigned':
+      // El terapeuta asignó una nueva tarea; refresca lista y stats.
+      loadTasks();
+      loadStats();
+      break;
+    case 'goal:new':
+      loadGoals();
+      break;
+    case 'connection:terminated':
+      // El terapeuta terminó la conexión — cerramos nuestra SSE y bloqueamos
+      // el envío de mensajes. Coincide con el caso POST /messages que rebota
+      // con 400; el frontend ya muestra toast de error desde sendMessage.
+      disconnectSSE();
+      toastMsg('Tu terapeuta terminó la conexión', 'error');
+      break;
+    // Otros tipos (checkin:new, task:completed, note:created) no son relevantes
+    // para el paciente y se ignoran silenciosamente.
+  }
 }
 
 function authHeaders(){return{'Content-Type':'application/json','Authorization':`Bearer ${authToken}`};}
@@ -91,7 +214,7 @@ async function loadMessages(){
     const box=document.getElementById('chatBox');
     const msgs=(d.messages||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
     if(!msgs.length){box.innerHTML='<div class="chat-empty-msg">¡Escribe el primer mensaje! ✍️</div>';return;}
-    box.innerHTML=msgs.map(m=>`<div class="msg ${m.is_therapist?'therapist':'patient'}"><strong>${sanitizeHTML(m.is_therapist?patientData.therapist.name:'Tú')}</strong><div class="msg-body">${sanitizeHTML(m.message)}</div><div class="msg-time">${new Date(m.created_at).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</div></div>`).join('');
+    box.innerHTML=msgs.map((m,i)=>`<div class="msg ${m.is_therapist?'therapist':'patient'}" style="animation-delay:${Math.min(i*.03,.3)}s"><strong>${sanitizeHTML(m.is_therapist?patientData.therapist.name:'Tú')}</strong><div class="msg-body">${sanitizeHTML(m.message)}</div><div class="msg-time">${new Date(m.created_at).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</div></div>`).join('');
     box.scrollTop=box.scrollHeight;
   }catch(e){}
 }
@@ -116,23 +239,75 @@ async function loadTasks(){
   try{
     const r=await fetch(`${API}/patients/${patientId}/assignments`,{headers:authHeaders()});const d=await r.json();
     const list=document.getElementById('tasksList');
+    list.innerHTML='';
     if(!d.assignments?.length){list.innerHTML='<div class="empty-state">No tienes tareas pendientes 🎉</div>';return;}
     const now=new Date();
-    list.innerHTML=d.assignments.map(t=>{
-      let dueClass='',dueLabel='';
+    d.assignments.forEach((t, i)=>{
+      const card=document.createElement('div');
+      card.className='task-item';
+      card.dataset.taskId=t.id;
+      let dueClass='',dueLabelHtml='';
       if(t.due_date){
         const due=new Date(t.due_date);
         const hoursLeft=(due-now)/(1000*60*60);
-        if(hoursLeft<0){dueClass='task-overdue';dueLabel=`<div class="due-label overdue">⚠️ ¡VENCIDA! ${due.toLocaleDateString('es-ES')}</div>`;}
-        else if(hoursLeft<=24){dueClass='task-due-today';dueLabel=`<div class="due-label due-today">⏰ Vence hoy: ${due.toLocaleDateString('es-ES')}</div>`;}
-        else{dueLabel=`<div class="due-label due-future">📅 Vence: ${due.toLocaleDateString('es-ES')}</div>`;}
+        if(hoursLeft<0){dueClass='task-overdue';dueLabelHtml=`<div class="due-label overdue">⚠️ ¡VENCIDA! ${due.toLocaleDateString('es-ES')}</div>`;}
+        else if(hoursLeft<=24){dueClass='task-due-today';dueLabelHtml=`<div class="due-label due-today">⏰ Vence hoy: ${due.toLocaleDateString('es-ES')}</div>`;}
+        else{dueLabelHtml=`<div class="due-label due-future">📅 Vence: ${due.toLocaleDateString('es-ES')}</div>`;}
       }
-      return`<div class="task-item ${dueClass}"><div class="task-title">${sanitizeHTML(t.title)}</div><div class="task-instructions">${sanitizeHTML(t.instructions)}</div>${dueLabel}<button class="btn btn-s btn-complete-task" data-task-id="${t.id}">✅ Marcar completada</button></div>`;
-    }).join('');
+      card.classList.add(dueClass);
+      // Title + kind + due label are still inline-string so the static look
+      // is preserved; only the form area is substituted when exercise_kind=clinical.
+      const head=document.createElement('div');
+      head.innerHTML=`<div class="task-title">${sanitizeHTML(t.title)}</div>${dueLabelHtml}`;
+      card.appendChild(head);
+      if(t.instructions){
+        const ins=document.createElement('div');
+        ins.className='task-instructions';
+        ins.textContent=t.instructions;
+        card.appendChild(ins);
+      }
+      // kind clinical → renderizar formulario interactivo (form, autosave,
+      // submit /complete). kind classic → botón legacy "Marcar completada".
+      // Usar whitelist explícita (no heurística != 'classic') por si una BD
+      // antigua tiene exercise_kind=null: cae al camino classic sin ambigüedad.
+      const isClinical = window.ExerciseForms && typeof window.ExerciseForms.isClinicalKind === 'function'
+        ? window.ExerciseForms.isClinicalKind(t.exercise_kind)
+        : (t.exercise_kind && t.exercise_kind !== 'classic');
+      if(isClinical){
+        const formMount=document.createElement('div');
+        formMount.className='exercise-form-mount';
+        card.appendChild(formMount);
+        // Helper global expuesto por /js/exercise-forms.js
+        if(window.ExerciseForms && typeof window.ExerciseForms.mountInteractiveCard==='function'){
+          window.ExerciseForms.mountInteractiveCard(formMount, t, t.latest_session||null, {
+            patientId, authToken, apiBase: API,
+            onSaved: ()=>{ /* autosave exito: nada por hacer */ },
+            onCompleted: (st, data)=>{
+              toastMsg('✅ Ejercicio finalizado. Tu terapeuta ya puede ver tus respuestas.');
+              loadTasks(); loadStats();
+            },
+          });
+        }else{
+          formMount.textContent='(Cargando formulario clínico…)';
+        }
+      }else{
+        const btn=document.createElement('button');
+        btn.className='btn btn-s btn-complete-task';
+        btn.dataset.taskId=t.id;
+        btn.textContent='✅ Marcar completada';
+        card.appendChild(btn);
+      }
+      list.appendChild(card);
+      // Staggered entrance delay for each task card
+      card.style.animationDelay = (i * 0.04) + 's';
+    });
   }catch(e){}
 }
 
 async function completeTask(id){
+  // Legacy path: solo aplica a kind='classic' (los kinds clínicos usan el
+  // botón "Finalizar ejercicio" dentro del formulario interactivo, que ya
+  // publica vía /sessions/:sid/complete y marca el assignment).
   await fetch(`${API}/patients/${patientId}/assignments/${id}`,{method:'PUT',headers:authHeaders(),body:JSON.stringify({completed:true})});
   toastMsg('🎉 ¡Tarea completada!');
   loadTasks();loadStats();
@@ -143,7 +318,7 @@ async function loadGoals(){
     const r=await fetch(`${API}/patients/${patientId}/goals`,{headers:authHeaders()});const d=await r.json();
     const list=document.getElementById('goalsList');
     if(!d.goals?.length){list.innerHTML='<div class="empty-state">Sin objetivos definidos</div>';return;}
-    list.innerHTML=d.goals.map(g=>{const pct=Math.min(100,Math.round((g.current_value/g.target_value)*100));return`<div class="goal-item"><strong>${sanitizeHTML(g.title)}</strong><br><small>${sanitizeHTML(g.metric)}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" data-width="${pct}"></div></div></div>`;}).join('');
+    list.innerHTML=d.goals.map((g,i)=>{const pct=Math.min(100,Math.round((g.current_value/g.target_value)*100));return`<div class="goal-item" style="animation-delay:${i*.04}s"><strong>${sanitizeHTML(g.title)}</strong><br><small>${sanitizeHTML(g.metric)}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" data-width="${pct}"></div></div></div>`;}).join('');
     // Apply progress bar widths after render
     requestAnimationFrame(()=>{
       document.querySelectorAll('.progress-fill[data-width]').forEach(el=>{el.style.width=el.dataset.width+'%';});
@@ -197,7 +372,7 @@ function startTechnique(type){
     },willClose:()=>toastMsg(`✅ ${t.title.split(' ').slice(0,2).join(' ')} completada`)});
 }
 
-function disconnect(){if(confirm('¿Desconectarte de tu terapeuta?')){localStorage.removeItem('patientConnection');location.reload();}}
+function disconnect(){if(confirm('¿Desconectarte de tu terapeuta?')){disconnectSSE();localStorage.removeItem('patientConnection');location.reload();}}
 
 async function loadProgress(){
   try{
@@ -232,14 +407,14 @@ async function loadProgress(){
     }else{noteDiv.classList.add('hidden');}
     const tl=document.getElementById('progressTimeline');
     if(!p.timeline?.length){tl.innerHTML='';return;}
-    tl.innerHTML=p.timeline.map(t=>{
+    tl.innerHTML=p.timeline.map((t,i)=>{
       const iconMap={checkin:'🌤️',task_done:'✅',goal_done:'🎯'};
       const icon=iconMap[t.type]||'📌';
       const date=new Date(t.date);
       const timeStr=date.toLocaleDateString('es-ES')===new Date().toLocaleDateString('es-ES')
         ?date.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
         :date.toLocaleDateString('es-ES',{day:'numeric',month:'short'});
-      return`<div class="progress-timeline-item"><span class="progress-timeline-icon">${icon}</span><span>${sanitizeHTML(t.summary)}</span><span class="progress-timeline-date">${timeStr}</span></div>`;
+      return`<div class="progress-timeline-item" style="animation-delay:${i*.04}s"><span class="progress-timeline-icon">${icon}</span><span>${sanitizeHTML(t.summary)}</span><span class="progress-timeline-date">${timeStr}</span></div>`;
     }).join('');
   }catch(e){console.error('Progress error:',e);}
 }
@@ -258,15 +433,14 @@ async function loadNotifications(){
 
 function renderNotifications(notifs){
   const list=document.getElementById('notifList');
-  if(!notifs.length){list.innerHTML='<div class="notif-empty">🔔 No tienes notificaciones</div>';return;}
-  list.innerHTML=notifs.map(n=>{
+  if(!notifs.length){list.innerHTML='<div class="notif-empty">🔔 No tienes notificaciones</div>';return;}    list.innerHTML=notifs.map((n,i)=>{
     const iconMap={assignment:'📋',message:'💬',reminder:'⏰',overdue:'⚠️',goal:'🎯',system:'ℹ️'};
     const icon=iconMap[n.type]||'📌';
     const time=new Date(n.created_at);
     const timeStr=time.toLocaleDateString('es-ES')==new Date().toLocaleDateString('es-ES')
       ?time.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})
       :time.toLocaleDateString('es-ES',{day:'numeric',month:'short'});
-    return`<div class="notif-item${n.is_read?'':' unread'}" data-notif-id="${n.id}"><div class="notif-icon">${icon}</div><div class="notif-content"><div class="notif-title">${sanitizeHTML(n.title)}</div><div class="notif-message">${sanitizeHTML(n.message)}</div><div class="notif-time">${timeStr}</div></div></div>`;
+    return`<div class="notif-item${n.is_read?'':' unread'}" data-notif-id="${n.id}" style="animation:fadeInUp .3s cubic-bezier(.22,1,.36,1) ${i*.03}s both"><div class="notif-icon">${icon}</div><div class="notif-content"><div class="notif-title">${sanitizeHTML(n.title)}</div><div class="notif-message">${sanitizeHTML(n.message)}</div><div class="notif-time">${timeStr}</div></div></div>`;
   }).join('');
 }
 

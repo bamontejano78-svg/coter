@@ -1,0 +1,65 @@
+Add inline SVG logo (C arc mark) + favicon + dark-aware style
+
+Usuario: crear logo SVG inline para reemplazar la tile "C" del
+brand-mark y la tile cuadrada del sidebar .logo (estilo Linear/Notion).
+
+Diseno del mark: arco unico (270 deg, round caps, stroke 3) que
+representa la "C" de Coter. Geometria minimalista, sin relleno
+(marca LINEAL: un solo trazo, escalable a 16px sin pixelado, sin
+emojis, sin gradients). Usa stroke=currentColor y fill=none para
+heredar el color del contexto via CSS tokens.
+
+Archivos:
+
+- www/favicon.svg (nuevo): SVG standalone con mark identico + soft
+  tinted bg circle (#4f46e5 @10% opacity light / #818cf8 @10% dark)
+  para asegurar legibilidad contra la barra neutral de tabs del
+  browser. Inline <style> incluye @media (prefers-color-scheme: dark)
+  para que el color del mark se autoadapte al OS theme (no solo
+  en el favicon del tab, sino donde sea que se muestre).
+
+- www/index.html:
+  * Anadido <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  * brand-mark ahora contenedor: SVG <svg width=20 height=20> con
+    path del mark en lugar del caracter "C".
+
+- www/paciente.html, www/terapeuta.html, www/reset-password.html:
+  * Anadido <link rel="icon"> identico.
+
+- www/terapeuta.html:
+  * Sidebar .logo: estructura cambiada de <div class="logo">Coter
+    Pro</div> a <div class="logo"><svg class="logo-icon">...
+    </svg><span>Coter Pro</span></div>.
+
+- www/css/landing.css:
+  * .brand-mark: removido font-size / font-weight / letter-spacing
+    (ya no contiene texto).
+  * Anadido .brand-mark svg { display: block } para evitar line-height.
+
+- www/css/therapist.css:
+  * .logo: removido .logo::before (pseudo-element indigo square).
+    .logo es ahora flex container (mantiene gap 10px, padding 18px
+    20px, border-bottom, font-display 16px Inter Tight).
+  * Anadido .logo-icon con color var(--p) (indigo accent, adapt
+    a dark mode: #818cf8) y flex-shrink 0.
+
+Garantias:
+- JS intacto. Solo se modificaron estilos y estructura HTML; las
+  clases que el JS usa (.logo, .brand-mark, .nav-item, etc.)
+  preservadas y verificadas via grep.
+- Dark mode: el mark usa currentColor, por tanto en sidebar hereda
+  var(--p) que se reasigna en el bloque prefers-color-scheme dark a
+  #818cf8. En landing el brand-mark usa fondo var(--accent) (que se
+  vuelve #818cf8 en dark) con stroke blanco via currentColor en el
+  contenedor div. El favicon autoadapta via @media inline.
+- Accesibilidad: SVG tiene aria-hidden=true en brand-mark y en
+  logo-icon (decorativo); el logo favicon tiene role=img + aria-label
+  = Coter. focusable=false consistentemente para evitar tab-trap.
+- Performance: inline SVG evita una request HTTP adicional por
+  brand-mark; favicon es una sola request.
+- Diseno: la marca geometrica es coherente con la curva de tipografia
+  Inter Tight (tracking ligero y formas geometricas simples) y la
+  paleta slate + accent indigo.
+- Compatibilidad: stroke SVG funciona en Chromium, Firefox, Safari
+  (todos los browsers del target). @media inside favicon SVG funciona
+  en los mismos browsers desde 2020.

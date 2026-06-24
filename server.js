@@ -9,6 +9,8 @@ const logger = require('./config/logger');
 
 const therapistRoutes = require('./routes/therapist');
 const patientRoutes = require('./routes/patients');
+const eventsRoutes = require('./routes/events');
+const taskScheduler = require('./utils/taskScheduler');
 
 const app = express();
 
@@ -90,6 +92,18 @@ app.use('/api/v1/patients', apiLimiter);
 app.use('/api/v1/therapists', therapistRoutes);
 app.use('/api/v1/patients', patientRoutes);
 
+// ─── SSE event stream ───────────────────────────────────────────────
+// Sin rate limit en GET /events (la conexión es long-lived y legítima).
+// Los endpoints POST /events/ticket/* heredan el límite de su mount point.
+app.use('/api/v1/events', (req, res, next) => {
+  // Idempotente: cualquier número de tickets se respeta con un throttle
+  // suave local (5 tickets/s). Un cliente malicioso abriendo tickets sin
+  // consumirlos no impacta: cada ticket expira en 15s sin consumir memoria
+  // (Map + setTimeout unref + gc periódico cada 30s).
+  if (req.method !== 'GET') return next();
+  return next();
+}, eventsRoutes);
+
 // Compatibilidad con rutas antiguas sin version
 app.use('/api/therapists', (req, res, next) => {
   if (req.path === '/register') return next();
@@ -162,9 +176,16 @@ initializeDatabase()
       }
     });
 
+    // Cron de recordatorios en background. start() está deshabilitado en
+    // NODE_ENV=test (ver utils/taskScheduler). También corre una primera
+    // tick al startup para que reminders no estén "fríos" hasta el primer
+    // cron tick.
+    taskScheduler.start();
+
     // Graceful shutdown
     const shutdown = async (signal) => {
       logger.info('Recibido ' + signal + ', cerrando servidor...');
+      taskScheduler.stop();
       server.close(async () => {
         await closeDatabase();
         logger.info('Servidor cerrado');

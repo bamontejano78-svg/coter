@@ -11,6 +11,9 @@ let templates=[],templateCategories=[],activeCategory=null;
 let isRefreshing=false;
 let refreshPromise=null;
 let patientPoll=null;
+let sseConnection=null;
+let sseReconnectTimer=null;
+let sseBackoffMs=0;
 
 // ═══════════════════════════════════════════════════════════
 // ANIMACIONES Y MICRO-INTERACCIONES
@@ -146,6 +149,7 @@ async function logout(){
     // Intentar revocar refresh tokens en el servidor
     await fetch(`${API}/therapists/logout`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
   }catch(e){}
+  disconnectSSE();
   localStorage.removeItem('coter_therapist');
   location.reload();
 }
@@ -205,7 +209,167 @@ function showApp(){
   document.getElementById('appScreen').classList.remove('hidden');
   document.getElementById('therapistName').textContent=therapist.name;
   loadDashboard();loadPatients();loadCode();
+  // Dashboard sigue usando polling 30s para stats que no son reactivos
+  // (la actividad reciente y los contadores solo cambian cuando llega un
+  // evento SSE, así que el polling es ahora opcional — pero lo conservamos
+  // como resync defensivo tras reconexiones largas o errores de carga).
   setInterval(loadDashboard,30000);
+  connectSSE();
+}
+
+// ─── SSE — Real-time stream para el terapeuta ───────────────────────
+//
+// Sustituye los setInterval(getPatients/check/modal poll) por un único stream
+// abierto. La auth sigue el patrón de ticket de un solo uso (ver routes/events.js).
+function disconnectSSE() {
+  if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer=null; }
+  if (sseConnection) { try { sseConnection.close(); } catch(e){} sseConnection=null; }
+  sseBackoffMs = 0;
+}
+
+async function connectSSE() {
+  if (!token) return;
+  disconnectSSE();
+  try {
+    const r = await api(API + '/events/ticket/therapist', { method: 'POST' });
+    const d = await r.json();
+    if (!d || !d.success || !d.ticket) {
+      scheduleSSEReconnect();
+      return;
+    }
+    sseConnection = new EventSource(API + '/events?ticket=' + encodeURIComponent(d.ticket));
+    sseBackoffMs = 0;
+
+    sseConnection.addEventListener('connected', () => {
+      // Re-sincronizamos la lista de pacientes y el dashboard al reconectar.
+      loadPatients({force: true});
+      loadDashboard();
+      if (currentPatientId) refreshCurrentPatientData();
+    });
+
+    sseConnection.onmessage = (ev) => {
+      let payload;
+      try { payload = JSON.parse(ev.data); } catch (e) { return; }
+      handleSSEEvent(payload);
+    };
+
+    sseConnection.onerror = () => {
+      if (!sseConnection) return;
+      if (sseConnection.readyState === EventSource.CLOSED) {
+        sseConnection.close();
+        sseConnection = null;
+        scheduleSSEReconnect();
+      }
+    };
+  } catch (e) {
+    console.warn('[SSE] connect failed:', e);
+    scheduleSSEReconnect();
+  }
+}
+
+function scheduleSSEReconnect() {
+  if (sseReconnectTimer) return;
+  sseBackoffMs = sseBackoffMs ? Math.min(sseBackoffMs * 2, 30000) : 2000;
+  sseReconnectTimer = setTimeout(() => { sseReconnectTimer=null; connectSSE(); }, sseBackoffMs);
+}
+
+// Refetch fresco del paciente cuyo modal está abierto. Llamado cuando llega
+// un mensaje:new u otro evento relevante. Encapsulado para que la lógica de
+// comparación "último mensaje == emitido vs recibido" (que ya teníamos en el
+// patientPoll) siga funcionando exactamente igual.
+async function refreshCurrentPatientData() {
+  if (!currentPatientId) return;
+  try {
+    const rp = await api(API + '/therapists/patients/' + currentPatientId);
+    const dp = await rp.json();
+    if (!dp.success || !dp.patient || !patientData) return;
+    const newLatest = dp.patient.messages && dp.patient.messages[0]?.id;
+    const oldLatest = patientData.messages && patientData.messages[0]?.id;
+    if ((dp.patient.messages || []).length !== (patientData.messages || []).length || newLatest !== oldLatest) {
+      patientData = dp.patient;
+      renderChat();
+    }
+
+    // Tareas: re-render si cambió el conjunto o el estado. La firma es
+    // "<id>:<status>" (suficiente para status changes; cambios de título se
+    // verían en el próximo render por pestaña).
+    const ticketsKey = (dp.patient.assignments || []).map(a => a.id + ':' + a.status).join(',');
+    if (currentPatientDataTicketsKey && currentPatientDataTicketsKey !== ticketsKey) {
+      currentPatientDataTicketsKey = ticketsKey;
+      renderTasks();
+    }
+    currentPatientDataTicketsKey = ticketsKey;
+
+    // También refrescamos tareas/check-ins si estos cambiaron (la pestaña
+    // "Tareas" del modal necesita enterarse).
+    if (currentPatientDataTicketsKey && currentPatientDataTicketsKey !== ticketsKey) {
+      currentPatientDataTicketsKey = ticketsKey;
+      renderTasks();
+    }
+  } catch (e) {
+    console.error('[refreshCurrentPatientData]', e);
+  }
+}
+let currentPatientDataTicketsKey = null;
+
+function handleSSEEvent(payload) {
+  if (!payload || !payload.type) return;
+  const t = payload.type;
+  const data = payload.data || {};
+  switch (t) {
+    case 'patient:connected':
+      // Paciente nuevo acaba de canjear un código de conexión.
+      PatientsCache.invalidate();
+      loadPatients({force: true});
+      loadDashboard();
+      showToast('🆕 Nuevo paciente conectado', 'success');
+      break;
+    case 'checkin:new': {
+      loadDashboard();
+      // Si este check-in corresponde al paciente del modal abierto, refresca.
+      if (currentPatientId && data.patientId === currentPatientId) {
+        refreshCurrentPatientData();
+      }
+      // Alerta clínica sutil si el paciente está en riesgo (mood <=3 o ansiedad >=9).
+      // No es un sistema de crisis completo; es una mejora de UX.
+      if (typeof data.mood === 'number' && data.mood <= 3) {
+        showToast('⚠️ Ánimo bajo en ' + (data.patientId?.slice(0, 8) || 'paciente'), 'warning');
+      }
+      break;
+    }
+    case 'task:completed':
+      loadDashboard();
+      if (currentPatientId && data.patientId === currentPatientId) {
+        refreshCurrentPatientData();
+      }
+      break;
+    case 'message:new':
+      // Si llega un mensaje y el modal del paciente correspondiente está
+      // abierto, refrescamos su chat. Si no hay modal, el dashboard polling
+      // 30s lo recogerá (no se considera crítico mostrarlo instantáneo en
+      // la lista resumida).
+      if (currentPatientId && data.patientId === currentPatientId) {
+        refreshCurrentPatientData();
+      }
+      break;
+    case 'connection:terminated':
+      if (data.by === 'self') {
+        // Confirmación local de que el disconnect que acabamos de hacer
+        // quedó propagado a otras pestañas. Nada que hacer en UI.
+      } else {
+        // Caso extraño (no debería llegar al terapeuta): por seguridad
+        // cerramos cualquier modal abierto y refrescamos la lista.
+        if (currentPatientId) closePatientModal();
+        PatientsCache.invalidate();
+        loadPatients({force: true});
+      }
+      break;
+    case 'note:created':
+      // Solo relevante si el modal está abierto y la pestaña de notas activa.
+      // El render actual solo se dispara al pulsar el tab; lo dejamos para
+      // una mejora futura (no añade valor clínico inmediato).
+      break;
+  }
 }
 
 async function loadDashboard(){
@@ -221,7 +385,7 @@ async function loadDashboard(){
     updateTrendChart(db.weeklyTrend||[]);
     const act=document.getElementById('recentActivity');
     if(!db.recentActivity?.length){act.innerHTML='<p class="empty-msg">Sin actividad reciente</p>';return;}
-    act.innerHTML=db.recentActivity.map((a,i)=>`<div class="recent-row" style="animation-delay:${i*50}ms"><span>${sanitizeHTML(a.patient_name||'Paciente '+a.patient_id?.slice(0,8))}</span><span>Ánimo: <strong>${a.mood}/10</strong></span><span class="recent-time">${new Date(a.created_at).toLocaleString('es-ES')}</span></div>`).join('');
+    act.innerHTML=db.recentActivity.map((a,i)=>`<div class="recent-row" style="animation-delay:${i*40}ms"><span>${sanitizeHTML(a.patient_name||'Paciente '+a.patient_id?.slice(0,8))}</span><span>Ánimo: <strong>${a.mood}/10</strong></span><span class="recent-time">${new Date(a.created_at).toLocaleString('es-ES')}</span></div>`).join('');
   }catch(e){console.error(e);}
 }
 
@@ -239,9 +403,9 @@ async function loadPatients({force=false}={}){
     const patients=await PatientsCache.getPatients({force});
     const tbody=document.getElementById('patientsTableBody');
     if(!patients.length){tbody.innerHTML='<tr><td colspan="6" class="empty-cell">No tienes pacientes aún</td></tr>';return;}
-    tbody.innerHTML=patients.map(p=>{
+    tbody.innerHTML=patients.map((p,i)=>{
       const badge=p.last_mood<=3?'badge-risk':p.last_mood>=7?'badge-ok':'badge-warn';
-      return`<tr><td><strong>${sanitizeHTML(p.name||'Anónimo')}</strong><br><small class="id-sub">${p.id?.slice(0,12)}...</small></td><td>${new Date(p.connected_at).toLocaleDateString('es-ES')}</td><td>${p.last_checkin?new Date(p.last_checkin).toLocaleDateString('es-ES'):'Nunca'}</td><td><strong>${p.last_mood||'-'}/10</strong></td><td><span class="badge ${badge}">${p.last_mood<=3?'⚠️ Riesgo':'✅ Estable'}</span></td><td><button class="btn btn-p btn-sm btn-open-patient" data-patient-id="${p.id}">📋 Ver</button></td></tr>`;
+      return`<tr style="animation:fadeInUp .3s cubic-bezier(.22,1,.36,1) ${i*.04}s both"><td><strong>${sanitizeHTML(p.name||'Anónimo')}</strong><br><small class="id-sub">${p.id?.slice(0,12)}...</small></td><td>${new Date(p.connected_at).toLocaleDateString('es-ES')}</td><td>${p.last_checkin?new Date(p.last_checkin).toLocaleDateString('es-ES'):'Nunca'}</td><td><strong>${p.last_mood||'-'}/10</strong></td><td><span class="badge ${badge}">${p.last_mood<=3?'⚠️ Riesgo':'✅ Estable'}</span></td><td><button class="btn btn-p btn-sm btn-open-patient" data-patient-id="${p.id}">📋 Ver</button></td></tr>`;
     }).join('');
   }catch(e){console.error('Error cargando pacientes:',e);}
 }
@@ -252,34 +416,13 @@ async function openPatient(patientId){
     const r=await api(`${API}/therapists/patients/${patientId}`);const d=await r.json();
     if(!d.success)return Swal.fire('Error','Paciente no encontrado','error');
     patientData=d.patient;
+    currentPatientDataTicketsKey = (patientData.assignments || []).map(a => a.id + ':' + a.status).join(',');
     document.getElementById('modalPatientName').textContent=patientData.name||'Paciente '+patientId.slice(0,8);
     renderChat();renderCheckins();renderTasks();renderGoals();renderNotes();
-    // FIX: polling a 4s para que los mensajes del paciente aparezcan en vivo
-    // mientras el modal está abierto. Antes solo se refrescaba al abrir;
-    // mensajes enviados en tiempo real quedaban invisibles hasta que el
-    // terapeuta cerrara y volviera a abrir el modal o enviara él mismo.
-    if(patientPoll)clearInterval(patientPoll);
-    patientPoll=setInterval(async()=>{
-      if(!currentPatientId)return;
-      try{
-        const rp=await api(`${API}/therapists/patients/${currentPatientId}`);const dp=await rp.json();
-        // Comparamos por length Y por id del mensaje más reciente:
-        // - length cambia si entra/sale algo de la ventana.
-        // - latest.id cambia cuando llega un mensaje nuevo (o cuando un
-        //   mensaje viejo cae fuera del límite de 100 en routes/therapist.js
-        //   → el más nuevo se mantiene visible aunque length quede estable).
-        // Antes solo comparabamos length, lo que dejaba invisibles los
-        // mensajes nuevos una vez cruzada la primera centena de historial.
-        if(dp.success&&dp.patient.messages&&patientData&&patientData.messages){
-          const newLatest=dp.patient.messages[0]?.id;
-          const oldLatest=patientData.messages[0]?.id;
-          if(dp.patient.messages.length!==patientData.messages.length||newLatest!==oldLatest){
-            patientData.messages=dp.patient.messages;
-            renderChat();
-          }
-        }
-      }catch(e){console.error('[patientPoll] error:',e);}
-    },4000);
+    // Eliminamos el patientPoll (antes 4s): los mensajes llegan por SSE
+    // (ver handleSSEEvent → message:new) y se refrescan automáticamente
+    // mediante refreshCurrentPatientData().
+    if (patientPoll) { clearInterval(patientPoll); patientPoll = null; }
   }catch(e){console.error(e);}
 }
 
@@ -305,7 +448,7 @@ async function sendTherapistMsg(){
 function renderCheckins(){
   const box=document.getElementById('patientCheckins');const cis=patientData.checkIns||[];
   if(!cis.length){box.innerHTML='<p class="empty-msg">Sin check-ins</p>';return;}
-  box.innerHTML=cis.slice(0,30).map(c=>`<div class="checkin-item"><div class="checkin-mood" data-mood="${c.mood}">${c.mood}</div><div><strong>Ánimo ${c.mood}/10</strong> | Ansiedad ${c.anxiety}/10 | Energía ${c.energy||'-'}/10<br><small class="muted">${new Date(c.created_at).toLocaleString('es-ES')}</small>${c.thoughts?`<br><em>"${sanitizeHTML(c.thoughts)}"</em>`:''}</div></div>`).join('');
+  box.innerHTML=cis.slice(0,30).map((c,i)=>`<div class="checkin-item" style="animation-delay:${i*.04}s"><div class="checkin-mood" data-mood="${c.mood}">${c.mood}</div><div><strong>Ánimo ${c.mood}/10</strong> | Ansiedad ${c.anxiety}/10 | Energía ${c.energy||'-'}/10<br><small class="muted">${new Date(c.created_at).toLocaleString('es-ES')}</small>${c.thoughts?`<br><em>"${sanitizeHTML(c.thoughts)}"</em>`:''}</div></div>`).join('');
   // Apply mood colors
   document.querySelectorAll('.checkin-mood[data-mood]').forEach(el=>{
     const m=parseInt(el.dataset.mood);
@@ -316,7 +459,57 @@ function renderCheckins(){
 function renderTasks(){
   const box=document.getElementById('patientTasks');const tasks=patientData.assignments||[];
   if(!tasks.length){box.innerHTML='<p class="empty-msg">Sin tareas asignadas</p>';return;}
-  box.innerHTML=tasks.map(t=>`<div class="task-item"><strong>${sanitizeHTML(t.title)}</strong> <span class="badge ${t.status==='completed'?'badge-ok':'badge-warn'}">${t.status==='completed'?'✅ Completada':'⏳ Pendiente'}</span><br><small>${sanitizeHTML(t.instructions)}</small>${t.due_date?`<br><small>📅 Vence: ${new Date(t.due_date).toLocaleDateString('es-ES')}</small>`:''}${t.status!=='completed'?`<br><button class="btn btn-s btn-sm btn-complete-task" data-task-id="${t.id}">Marcar completada</button>`:''}</div>`).join('');
+  box.innerHTML='';
+  const kindLabels={thought_record:'Thought Record (Beck)',behavioral_activation:'Activación Conductual',graded_exposure:'Exposición Gradual'};
+  tasks.forEach((t,idx)=>{
+    const card=document.createElement('div');
+    card.className='task-item';
+    card.dataset.taskId=t.id;
+    const isClinical = window.ExerciseForms && typeof window.ExerciseForms.isClinicalKind === 'function'
+      ? window.ExerciseForms.isClinicalKind(t.exercise_kind)
+      : (t.exercise_kind && t.exercise_kind !== 'classic');
+    const hasCompletedSession=isClinical && t.status==='completed' && t.latest_session && t.latest_session.is_complete;
+    card.innerHTML=`<div><strong>${sanitizeHTML(t.title)}</strong> <span class="badge ${t.status==='completed'?'badge-ok':'badge-warn'}">${t.status==='completed'?'Completada':'Pendiente'}</span>${isClinical?` <span class="exercise-kind-badge">${kindLabels[t.exercise_kind]||t.exercise_kind}</span>`:''}</div><small>${sanitizeHTML(t.instructions||'')}</small>${t.due_date?`<br><small> Vence: ${new Date(t.due_date).toLocaleDateString('es-ES')}</small>`:''}`;
+    card.style.animationDelay = (idx * 0.04) + 's';
+    if(t.status!=='completed'){
+      const btn=document.createElement('button');
+      btn.className='btn btn-s btn-sm btn-complete-task';
+      btn.dataset.taskId=t.id;
+      btn.textContent='Marcar completada';
+      card.appendChild(btn);
+    }
+    if(hasCompletedSession){
+      const btn=document.createElement('button');
+      btn.className='btn btn-w btn-sm btn-view-responses';
+      btn.dataset.taskId=t.id;
+      btn.textContent='📊 Ver respuestas';
+      card.appendChild(btn);
+    }
+    box.appendChild(card);
+  });
+}
+
+// toggleResponses(taskId): expande/colapsa inline el panel estructurado de
+// respuestas para una tarea clínica completada. Reutiliza el módulo
+// window.ExerciseForms (cargado antes de therapist.js).
+function toggleResponses(taskId){
+  const card=document.querySelector(`#patientTasks [data-task-id="${taskId}"]`);
+  if(!card) return;
+  const existing=card.nextElementSibling;
+  if(existing && existing.classList.contains('exercise-panel')){
+    existing.remove();
+    return;
+  }
+  const t=(patientData.assignments||[]).find(x=>x.id===taskId);
+  if(!t || !t.latest_session) return;
+  const panel=document.createElement('div');
+  panel.className='exercise-panel';
+  card.parentNode.insertBefore(panel, card.nextSibling);
+  if(window.ExerciseForms && typeof window.ExerciseForms.renderReadOnly==='function'){
+    window.ExerciseForms.renderReadOnly(panel, t.exercise_schema, t.latest_session.responses||{});
+  }else{
+    panel.textContent='(Renderer no disponible.)';
+  }
 }
 
 async function completeTask(taskId){
@@ -339,10 +532,9 @@ function showAddTask(){
 
 function renderGoals(){
   const box=document.getElementById('patientGoals');const goals=patientData.goals||[];
-  if(!goals.length){box.innerHTML='<p class="empty-msg">Sin objetivos</p>';return;}
-  box.innerHTML=goals.map(g=>{
+  if(!goals.length){box.innerHTML='<p class="empty-msg">Sin objetivos</p>';return;}    box.innerHTML=goals.map((g,i)=>{
     const pct=Math.min(100,Math.round((g.current_value/g.target_value)*100));
-    return`<div class="goal-item"><strong>${sanitizeHTML(g.title)}</strong> <span class="badge ${g.status==='completed'?'badge-ok':'badge-warn'}">${g.status==='completed'?'✅ Completado':'🎯 Activo'}</span><br><small>${sanitizeHTML(g.metric)}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" data-width="${pct}"></div></div>${g.status!=='completed'?`<input type="number" id="goalVal${g.id}" placeholder="Nuevo valor" class="goal-input"> <button class="btn btn-s btn-sm btn-update-goal" data-goal-id="${g.id}">Actualizar</button>`:''}</div>`;
+    return`<div class="goal-item" style="animation-delay:${i*.04}s"><strong>${sanitizeHTML(g.title)}</strong> <span class="badge ${g.status==='completed'?'badge-ok':'badge-warn'}">${g.status==='completed'?'✅ Completado':'🎯 Activo'}</span><br><small>${sanitizeHTML(g.metric)}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" data-width="${pct}"></div></div>${g.status!=='completed'?`<input type="number" id="goalVal${g.id}" placeholder="Nuevo valor" class="goal-input"> <button class="btn btn-s btn-sm btn-update-goal" data-goal-id="${g.id}">Actualizar</button>`:''}</div>`;
   }).join('');
   requestAnimationFrame(()=>{
     document.querySelectorAll('.progress-fill[data-width]').forEach(el=>{el.style.width=el.dataset.width+'%';});
@@ -362,10 +554,10 @@ async function renderNotes(){
   try{
     const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes`);const d=await r.json();
     if(!d.success||!d.notes?.length){box.innerHTML='<p class="empty-msg">Sin notas clínicas</p>';return;}
-    box.innerHTML=d.notes.map(n=>{
+    box.innerHTML=d.notes.map((n,i)=>{
       const date=new Date(n.created_at).toLocaleString('es-ES');
       const updated=n.updated_at&&n.updated_at!==n.created_at?`<span class="edited-tag"> (editada)</span>`:'';
-      return`<div class="soap-note" id="note-${n.id}">
+      return`<div class="soap-note" id="note-${n.id}" style="animation-delay:${i*.04}s">
         <div class="soap-note-header"><div><strong>📝 ${date}</strong>${updated}</div><div class="soap-note-date">ID: ${n.id.slice(0,8)}...</div></div>
         ${n.subjective?`<div class="soap-note-field"><strong>S — Subjetivo</strong>${sanitizeHTML(n.subjective)}</div>`:''}
         ${n.objective?`<div class="soap-note-field"><strong>O — Objetivo</strong>${sanitizeHTML(n.objective)}</div>`:''}
@@ -479,8 +671,7 @@ function renderTemplates(){
   if(activeCategory)filtered=filtered.filter(t=>t.category===activeCategory);
   if(search)filtered=filtered.filter(t=>t.title.toLowerCase().includes(search)||t.instructions.toLowerCase().includes(search)||t.category.toLowerCase().includes(search));
   const grid=document.getElementById('libraryGrid');
-  if(!filtered.length){grid.innerHTML='<p class="empty-msg">No se encontraron tareas</p>';return;}
-  grid.innerHTML=filtered.map(t=>{
+  if(!filtered.length){grid.innerHTML='<p class="empty-msg">No se encontraron tareas</p>';return;}        grid.innerHTML=filtered.map((t,i)=>{
     const isCustom=!!t.therapist_id;
     const cardClass=isCustom?'template-card custom-template':'template-card system-template';
     const customBadge=isCustom?'<span class="custom-badge">⭐ Tuya</span>':'';
@@ -491,7 +682,7 @@ function renderTemplates(){
          <button class="btn btn-s btn-sm btn-assign-template" data-template-id="${t.id}">📋 Asignar</button>`
       :`<button class="btn btn-p btn-sm btn-toggle-template" data-template-id="${t.id}">📖 Ver instrucciones</button>
          <button class="btn btn-s btn-sm btn-assign-template" data-template-id="${t.id}">📋 Asignar a paciente</button>`;
-    return`<div class="${cardClass}" id="tcard-${t.id}">
+    return`<div class="${cardClass}" id="tcard-${t.id}" style="animation-delay:${i*.05}s">
       <div class="template-category">${sanitizeHTML(t.category)}${customBadge}</div>
       <div class="template-title">${sanitizeHTML(t.title)}</div>
       <div class="template-meta">
@@ -855,6 +1046,8 @@ document.addEventListener('click', function(e){
   // Complete task (patient modal)
   const completeBtn = e.target.closest('.btn-complete-task');
   if (completeBtn) { completeTask(completeBtn.dataset.taskId); return; }
+  const viewResponsesBtn = e.target.closest('.btn-view-responses');
+  if (viewResponsesBtn) { toggleResponses(viewResponsesBtn.dataset.taskId); return; }
   
   // Update goal
   const goalBtn = e.target.closest('.btn-update-goal');

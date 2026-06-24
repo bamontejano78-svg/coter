@@ -2,10 +2,18 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { getPool } = require('../database');
 const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
-const { checkTaskReminders } = require('../utils/notifications');
+// checkTaskReminders fue eliminado: los recordatorios ahora los genera el cron
+// job utils/taskScheduler.runTick → runAllPendingReminders en background.
+// Mantener este GET como endpoint idempotente (REST): solo lee.
 const { authenticatePatient } = require('../middleware/auth');
 const { audit, auditAccess, auditChange } = require('../utils/audit');
 const logger = require('../config/logger');
+const bus = require('../utils/eventBus');
+const { getSchema, validateResponses } = require('../utils/exerciseSchemas');
+const { encryptFieldsForKind, decryptFieldsForKind } = require('../utils/exerciseEncryption');
+// Helpers compartidos con routes/therapist.js para resolver schema y mergear
+// la fila exercise_sessions (responses + encrypted_blob) en respuestas planas.
+const { schemaForAssignment, decodeSessionResponses, fetchLatestSessionsForAssignments } = require('../utils/exerciseHelpers');
 
 const router = express.Router();
 
@@ -46,6 +54,13 @@ router.post('/connect', async (req, res) => {
 
     audit({ who: patientId, role: 'patient', action: 'connect', resource: 'patient', resourceId: patientId, ip: req.ip, metadata: { therapistId: codeData.therapist_id, code: connection_code } });
 
+    // Notificar al terapeuta que un paciente nuevo acaba de canjear el código.
+    // Si tiene el dashboard abierto, verá aparecer el paciente en su lista
+    // sin necesidad de recargar.
+    bus.publish(bus.topicFor('therapist', codeData.therapist_id), 'patient:connected', {
+      patientId, patientName: patientName || null, at: new Date().toISOString(),
+    });
+
     res.json({
       success: true,
       patient_id: patientId,
@@ -71,12 +86,24 @@ router.post('/:patientId/check-ins', async (req, res) => {
     if (!mood || !anxiety || !energy) return res.status(400).json({ error: 'Mood, anxiety y energy requeridos' });
 
     const pool = getPool();
+    const { rows: connRows } = await pool.query(
+      "SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'",
+      [patientId]
+    );
+    const therapistId = connRows.length > 0 ? connRows[0].therapist_id : null;
     const id = uuidv4();
     await pool.query(
       'INSERT INTO check_ins (id, patient_id, mood, anxiety, energy, thoughts) VALUES ($1, $2, $3, $4, $5, $6)',
       [id, patientId, mood, anxiety, energy || 5, encrypt(thoughts || '')]
     );
     audit({ who: patientId, role: 'patient', action: 'create_checkin', resource: 'check_in', resourceId: id, ip: req.ip, metadata: { mood, anxiety, energy } });
+
+    if (therapistId) {
+      bus.publish(bus.topicFor('therapist', therapistId), 'checkin:new', {
+        patientId, checkInId: id, mood, anxiety, energy: energy || 5,
+      });
+    }
+
     res.json({ success: true, check_in_id: id, message: 'Check-in guardado' });
   } catch (err) {
     logger.error('Error guardando check-in', { error: err.message });
@@ -146,12 +173,23 @@ router.post('/:patientId/messages', async (req, res) => {
     );
     if (connRows.length === 0) return res.status(400).json({ error: 'Paciente no conectado' });
 
+    const therapistId = connRows[0].therapist_id;
     const messageId = uuidv4();
     await pool.query(
       'INSERT INTO messages (id, therapist_id, patient_id, message, is_therapist) VALUES ($1, $2, $3, $4, FALSE)',
-      [messageId, connRows[0].therapist_id, patientId, encrypt(message)]
+      [messageId, therapistId, patientId, encrypt(message)]
     );
     audit({ who: patientId, role: 'patient', action: 'send_message', resource: 'message', resourceId: messageId, ip: req.ip });
+
+    // Publicar al terapeuta (para el modal abierto o la lista activa) y al
+    // propio paciente (multipestaña).
+    bus.publish(bus.topicFor('therapist', therapistId), 'message:new', {
+      patientId, messageId, from: 'patient',
+    });
+    bus.publish(bus.topicFor('patient', patientId), 'message:new', {
+      patientId, messageId, from: 'patient',
+    });
+
     res.json({ success: true, message_id: messageId, message: 'Mensaje enviado' });
   } catch (err) {
     logger.error('Error enviando mensaje', { error: err.message });
@@ -168,7 +206,44 @@ router.get('/:patientId/assignments', async (req, res) => {
       "SELECT * FROM assignments WHERE patient_id = $1 AND status = 'assigned' ORDER BY created_at DESC",
       [patientId]
     );
-    res.json({ success: true, assignments: decryptAssignments(rows) });
+    const decrypted = decryptAssignments(rows);
+
+    // Enriquecemos con latest_session para que el frontend pueda pintar
+    // el formulario con el último estado guardado sin tener que hacer
+    // una segunda request a una ruta específica. classic siempre es null
+    // (no se permite /start para esos). Para kind clínico con sesión en
+    // curso, devolvemos id + is_complete + responses merged (decrypted).
+    //
+    // También pre-resolvemos `exercise_schema` server-side, llamando a
+    // getSchema(kind, dbSchema, {mode,phobia}) para garantizar que el cliente
+    // recibe el schema efectivo (incluye variantes como BA diary vs schedule
+    // o GE agoraphobia vs claustrophobia). Si el caller no trae variant info
+    // (assignment.exercise_schema NULL y sin discriminante), la BD seed ya
+    // trae un schema completo, pero defendemos con fallback al estático.
+    const latestByAssignment = await fetchLatestSessionsForAssignments(pool, patientId, decrypted);
+    const enriched = decrypted.map(a => {
+      const resolvedSchema = schemaForAssignment(a) || a.exercise_schema || null;
+      const sess = latestByAssignment.get(a.id);
+      if (!sess) return { ...a, exercise_schema: resolvedSchema, latest_session: null };
+      return {
+        ...a,
+        exercise_schema: resolvedSchema,
+        latest_session: {
+          id: sess.id,
+          exercise_kind: sess.exercise_kind,
+          is_complete: sess.is_complete,
+          started_at: sess.started_at,
+          updated_at: sess.updated_at,
+          completed_at: sess.completed_at,
+          // NO devolvemos encrypted_blob al frontend (es ciphertext opaco);
+          // se devuelve responses merged (no sensibles + sensibles descifrados)
+          // para que el formulario hidrate sus inputs sin segundo round-trip.
+          responses: decodeSessionResponses(sess, a),
+        },
+      };
+    });
+
+    res.json({ success: true, assignments: enriched });
   } catch (err) {
     logger.error('Error cargando tareas', { error: err.message });
     res.status(500).json({ error: 'Error al cargar' });
@@ -178,10 +253,20 @@ router.get('/:patientId/assignments', async (req, res) => {
 router.put('/:patientId/assignments/:assignmentId', async (req, res) => {
   try {
     const { patientId, assignmentId } = req.params;
-    await getPool().query(
+    const pool = getPool();
+    const { rows: connRows } = await pool.query(
+      "SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'",
+      [patientId]
+    );
+    await pool.query(
       "UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1 AND patient_id = $2",
       [assignmentId, patientId]
     );
+    if (connRows.length > 0) {
+      bus.publish(bus.topicFor('therapist', connRows[0].therapist_id), 'task:completed', {
+        patientId, assignmentId,
+      });
+    }
     res.json({ success: true, message: 'Tarea completada' });
   } catch (err) {
     logger.error('Error completando tarea', { error: err.message });
@@ -324,7 +409,6 @@ router.get('/:patientId/notifications', async (req, res) => {
   try {
     const { patientId } = req.params;
     const pool = getPool();
-    checkTaskReminders(pool, patientId);
     const limit = Math.min(parseInt(req.query.limit) || 30, 100);
     const offset = parseInt(req.query.offset) || 0;
 
@@ -369,6 +453,290 @@ router.put('/:patientId/notifications/:notificationId/read', async (req, res) =>
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════
+// SESIONES DE EJERCICIOS CLÍNICOS EMBEBIDOS (migration 007)
+// ══════════════════════════════════════════════════════════════════
+//
+// Estas rutas SOLO aplican a assignments con exercise_kind clínico
+// (thought_record / behavioral_activation / graded_exposure). El flujo
+// clásico (solo instrucciones + Marcar completada) sigue usando el
+// PUT /:patientId/assignments/:assignmentId legacy de arriba.
+//
+// Ciclo de vida de una sesión:
+//
+//   POST /sessions/start
+//     Crea fila exercise_sessions (id, assignment_id, patient_id,
+//     exercise_kind, responses='{}', is_complete=false). El terapeuta
+//     recibe un evento bus 'exercise:progress' con status='started'
+//     para que su dashboard pueda flairar "en curso".
+//
+//   PUT  /sessions/:sid  (autosave)
+//
+//     Recibe `responses` plano. Valida tipos pero NO required: el
+//     paciente va guardando parcial. Encripta campos sensitive (AES-256-
+//     GCM via utils/exerciseEncryption), escribe responses={no sensibles}
+//     JSONB y encrypted_blob=ciphertext. Emite 'exercise:progress' al
+//     terapeuta con status='autosaved'. Idempotente: N PUTs consecutivos
+//     solo dejan el último.
+//
+//   POST /sessions/:sid/complete
+//
+//     Validación ESTRICTA (required en cada field según el schema).
+//     Devuelve 422 con errors[] si falta algo. Si todo OK:
+//       - UPDATE exercise_sessions SET is_complete=true, completed_at=NOW()
+//       - UPDATE assignments SET status='completed', completed_at=NOW()
+//       - bus.publish 'exercise:completed' (terapeuta + paciente)
+//     Tras completarlo, el legacy PUT /assignments/:id queda RESUELTO
+//     por la fila assignment.status='completed' (no-op si el paciente
+//     intenta re-completar).
+//
+// Decisión sobre el linkage a therapist:
+//   El middleware authenticatePatient ya garantiza que el token corresponde
+//   al :patientId del path. Para emitir eventos al terapeuta correcto,
+//   resolvemos therapist_patients.status='active' (paciente debe estar
+//   conectado). Si el paciente se desconectó tras la sesión, el evento
+//   se pierde (SSE no durable storage; el terapeuta verá el estado al
+//   cargar el dashboard con la próxima SSR/refresh).
+
+router.post('/:patientId/sessions/start', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    // `assignment_id` o `assignmentId` aceptamos para no romper clientes
+    // que envíen el nombre en uno u otro estilo.
+    const assignmentId = (req.body && (req.body.assignment_id || req.body.assignmentId)) || null;
+    if (!assignmentId) return res.status(400).json({ error: 'assignment_id requerido' });
+
+    const pool = getPool();
+    const { rows: aRows } = await pool.query(
+      `SELECT id, exercise_kind, exercise_schema, status, title
+         FROM assignments
+        WHERE id = $1 AND patient_id = $2`,
+      [assignmentId, patientId]
+    );
+    if (aRows.length === 0) return res.status(404).json({ error: 'Tarea no encontrada' });
+    const asg = aRows[0];
+    // classic NO soporta sesiones interactivas: la ruta legacy PUT
+    // /assignments/:id sigue siendo el camino correcto.
+    if (!asg.exercise_kind || asg.exercise_kind === 'classic') {
+      return res.status(400).json({ error: 'Esta tarea no es interactiva (kind: "classic")' });
+    }
+    if (asg.status !== 'assigned') {
+      return res.status(400).json({ error: 'La tarea ya está finalizada' });
+    }
+
+    const sessionId = uuidv4();
+    await pool.query(
+      `INSERT INTO exercise_sessions (id, assignment_id, patient_id, exercise_kind, responses)
+        VALUES ($1, $2, $3, $4, '{}'::jsonb)`,
+      [sessionId, assignmentId, patientId, asg.exercise_kind]
+    );
+
+    audit({ who: patientId, role: 'patient', action: 'start_exercise_session', resource: 'exercise_session', resourceId: sessionId, ip: req.ip, metadata: { assignmentId, exerciseKind: asg.exercise_kind } });
+
+    // Notificar al terapeuta (no fatal si no hay vínculo activo).
+    const { rows: connRows } = await pool.query(
+      `SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'`,
+      [patientId]
+    );
+    if (connRows.length > 0) {
+      bus.publish(bus.topicFor('therapist', connRows[0].therapist_id), 'exercise:progress', {
+        patientId,
+        assignmentId,
+        sessionId,
+        exerciseKind: asg.exercise_kind,
+        status: 'started',
+        at: new Date().toISOString(),
+      });
+    }
+
+    res.json({
+      success: true,
+      session_id: sessionId,
+      assignment_id: assignmentId,
+      exercise_kind: asg.exercise_kind,
+      exercise_schema: asg.exercise_schema,
+      started_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error('Error iniciando sesión de ejercicio', { error: err.message });
+    res.status(500).json({ error: 'Error al iniciar sesión' });
+  }
+});
+
+router.put('/:patientId/sessions/:sid', async (req, res) => {
+  try {
+    const { patientId, sid } = req.params;
+    const body = req.body || {};
+    const responses = body.responses;
+
+    if (!responses || typeof responses !== 'object' || Array.isArray(responses)) {
+      return res.status(400).json({ error: 'responses debe ser un objeto plano' });
+    }
+
+    const pool = getPool();
+    const { rows: sRows } = await pool.query(
+      `SELECT s.id, s.assignment_id, s.patient_id, s.exercise_kind, s.is_complete,
+              a.exercise_schema, a.id AS asg_id, a.status AS asg_status
+         FROM exercise_sessions s
+         JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.id = $1 AND s.patient_id = $2`,
+      [sid, patientId]
+    );
+    if (sRows.length === 0) return res.status(404).json({ error: 'Sesión no encontrada' });
+    const sess = sRows[0];
+    if (sess.is_complete) return res.status(400).json({ error: 'La sesión ya está finalizada' });
+    if (sess.asg_status !== 'assigned') {
+      // Puede haber quedado completed por un /complete race; defensivo.
+      return res.status(400).json({ error: 'La tarea ya no se puede modificar' });
+    }
+
+    const schema = schemaForAssignment(sess);
+    if (!schema) return res.status(500).json({ error: 'schema no encontrado para esta sesión' });
+
+    // encryptFieldsForKind siempre strippea campos sensibles del responses.
+    // Si el paciente envia respuestas vacías para los sensitive, igualmente
+    // quedan fuera del JSONB. Esto reduce ruido y uniforma el contrato.
+    const { responses: cleaned, encrypted_blob } = encryptFieldsForKind(responses, schema);
+
+    await pool.query(
+      `UPDATE exercise_sessions
+          SET responses = $1::jsonb, encrypted_blob = $2
+        WHERE id = $3`,
+      [JSON.stringify(cleaned), encrypted_blob, sid]
+    );
+
+    audit({ who: patientId, role: 'patient', action: 'autosave_exercise_session', resource: 'exercise_session', resourceId: sid, ip: req.ip, metadata: { assignmentId: sess.assignment_id, exerciseKind: sess.exercise_kind, hasBlob: !!encrypted_blob } });
+
+    // Terapeuta: evento "progreso". No bloqueante si no hay vínculo.
+    const { rows: connRows } = await pool.query(
+      `SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'`,
+      [patientId]
+    );
+    if (connRows.length > 0) {
+      bus.publish(bus.topicFor('therapist', connRows[0].therapist_id), 'exercise:progress', {
+        patientId,
+        assignmentId: sess.assignment_id,
+        sessionId: sid,
+        exerciseKind: sess.exercise_kind,
+        status: 'autosaved',
+        at: new Date().toISOString(),
+      });
+    }
+
+    res.json({
+      success: true,
+      session_id: sid,
+      saved_at: new Date().toISOString(),
+      has_encrypted_blob: !!encrypted_blob,
+    });
+  } catch (err) {
+    logger.error('Error autosave sesión de ejercicio', { error: err.message });
+    res.status(500).json({ error: 'Error al guardar' });
+  }
+});
+
+router.post('/:patientId/sessions/:sid/complete', async (req, res) => {
+  try {
+    const { patientId, sid } = req.params;
+
+    const pool = getPool();
+    const { rows: sRows } = await pool.query(
+      `SELECT s.id, s.assignment_id, s.patient_id, s.exercise_kind, s.is_complete,
+              s.responses, s.encrypted_blob,
+              a.exercise_schema, a.status AS asg_status
+         FROM exercise_sessions s
+         JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.id = $1 AND s.patient_id = $2`,
+      [sid, patientId]
+    );
+    if (sRows.length === 0) return res.status(404).json({ error: 'Sesión no encontrada' });
+    const sess = sRows[0];
+    if (sess.is_complete) return res.status(400).json({ error: 'La sesión ya está finalizada' });
+    if (sess.asg_status !== 'assigned') {
+      return res.status(400).json({ error: 'La tarea ya está finalizada' });
+    }
+
+    const schema = schemaForAssignment(sess);
+    if (!schema) return res.status(500).json({ error: 'schema no encontrado para esta sesión' });
+
+    // Validación ESTRICTA: cuando va a completar, todos los required:true
+    // del schema deben estar presentes y válidos. Desencriptamos el blob
+    // para validar la forma merged con sensibles incluidos.
+    const merged = decryptFieldsForKind(sess.responses || {}, sess.encrypted_blob, schema);
+    const validation = validateResponses(merged, schema);
+    if (!validation.valid) {
+      return res.status(422).json({
+        error: 'Faltan campos requeridos o son inválidos',
+        errors: validation.errors,
+      });
+    }
+
+    const now = new Date();
+    // ╭─ PHI invariant ──────────────────────────────────────────────────\n    // CRITICAL: we re-encode the merged form (sensitive + non-sensitive) so
+    // the final stored layout respects the PHI contract: sensitives go to
+    // encrypted_blob (AES-256-GCM ciphertext), non-sensitives go to the JSONB
+    // responses column for queryable aggregation. Writing JSON.stringify(merged)
+    // directly into `responses` would store sensitive PHI plaintext at rest,
+    // defeating the whole purpose of encryptFieldsForKind. (Audited 2026-06.)
+    // ────────────────────────────────────────────────────────────────────
+    const reEncoded = encryptFieldsForKind(merged, schema);
+    await pool.query(
+      `UPDATE exercise_sessions
+          SET is_complete = TRUE, completed_at = NOW(),
+              responses = $1::jsonb, encrypted_blob = $2
+        WHERE id = $3`,
+      [JSON.stringify(reEncoded.responses), reEncoded.encrypted_blob, sid]
+    );
+    // Marcar también el assignment para que la query
+    //   SELECT * FROM assignments WHERE status = 'assigned'
+    // deje de devolverlo en /:patientId/assignments.
+    await pool.query(
+      `UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1`,
+      [sess.assignment_id]
+    );
+
+    audit({ who: patientId, role: 'patient', action: 'complete_exercise_session', resource: 'exercise_session', resourceId: sid, ip: req.ip, metadata: { assignmentId: sess.assignment_id, exerciseKind: sess.exercise_kind } });
+
+    // Eventos bus:
+    //  - 'exercise:completed' al terapeuta: el modal de paciente muestra
+    //    el badge "completado" en tiempo real.
+    //  - 'exercise:completed' al paciente: multipestaña / cierre de modal.
+    //  - Mantenemos la firma task:completed para compatibilidad con handlers
+    //    SSE viejos que aún estén escuchando ese canal.
+    const completionPayload = {
+      patientId,
+      assignmentId: sess.assignment_id,
+      sessionId: sid,
+      exerciseKind: sess.exercise_kind,
+      completedAt: now.toISOString(),
+    };
+    const { rows: connRows } = await pool.query(
+      `SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'`,
+      [patientId]
+    );
+    if (connRows.length > 0) {
+      bus.publish(bus.topicFor('therapist', connRows[0].therapist_id), 'exercise:completed', completionPayload);
+      bus.publish(bus.topicFor('therapist', connRows[0].therapist_id), 'task:completed', {
+        patientId,
+        assignmentId: sess.assignment_id,
+        via: 'interactive_exercise',
+      });
+    }
+    bus.publish(bus.topicFor('patient', patientId), 'exercise:completed', completionPayload);
+
+    res.json({
+      success: true,
+      message: 'Ejercicio completado',
+      session_id: sid,
+      assignment_id: sess.assignment_id,
+      completed_at: now.toISOString(),
+    });
+  } catch (err) {
+    logger.error('Error completando sesión de ejercicio', { error: err.message });
+    res.status(500).json({ error: 'Error al completar' });
   }
 });
 
