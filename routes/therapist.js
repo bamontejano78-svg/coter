@@ -1002,7 +1002,14 @@ router.post('/password-recovery', [
       logger.info('URL: ' + resetUrl);
     }
 
-    res.json({ success: true, message: 'Si el email existe, recibiras instrucciones' });
+    // En desarrollo, si el email no se envió (SMTP no configurado),
+    // devolvemos el reset_url en la respuesta para que el frontend
+    // pueda mostrarlo como enlace directo al terapeuta.
+    const response = { success: true, message: 'Si el email existe, recibiras instrucciones' };
+    if (!config.isProd && !emailSent) {
+      response.reset_url = resetUrl;
+    }
+    res.json(response);
   } catch (err) {
     logger.error('Error recuperacion', { error: err.message });
     res.json({ success: true, message: 'Si el email existe, recibiras instrucciones' });
