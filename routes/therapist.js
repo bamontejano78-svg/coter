@@ -10,6 +10,11 @@ const { authenticateToken } = require('../middleware/auth');
 const config = require('../config/env');
 const logger = require('../config/logger');
 const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
+// Importamos KINDS (whitelist 100% sincronizada con migration 007 CHECK constraint)
+// y getSchema() (resuelve el schema efectivo para cada kind clínico,
+// incluyendo las discriminantes mode/phobia para BA y GE). Ver
+// /utils/exerciseSchemas.test.js para el contrato que esto mantiene.
+const { getSchema, KINDS } = require('../utils/exerciseSchemas');
 const { createNotification } = require('../utils/notifications');
 const { audit, auditAccess, auditChange } = require('../utils/audit');
 const bus = require('../utils/eventBus');
@@ -590,17 +595,63 @@ router.post('/patients/:patientId/messages', authenticateToken, async (req, res)
 router.post('/patients/:patientId/assignments', authenticateToken, async (req, res) => {
   try {
     const { patientId } = req.params;
-    const { type, title, instructions, due_date } = req.body;
+    const {
+      type, title, instructions, due_date,
+      // Nuevos (migration 007): exercise_kind indica si el paciente recibirá
+      // un formulario interactivo (thought_record | behavioral_activation |
+      // graded_exposure) o solo instrucciones de texto (classic, default).
+      // exercise_schema es el snapshot del schema embebido en la asignación:
+      // se congela la versión clínica que verá el paciente aunque el
+      // terapeuta edite la plantilla después (consistencia clínica para
+      // tareas ya asignadas). Esta es la razón por la cual guardamos el
+      // schema en assignments y no solo en task_templates.
+      exercise_kind = 'classic', exercise_schema: clientSchema = null,
+      mode = null, phobia = null,
+    } = req.body;
     if (!type || !title || !instructions) return res.status(400).json({ success: false, error: 'Tipo, titulo e instrucciones requeridos' });
+    if (!KINDS.includes(exercise_kind)) {
+      return res.status(400).json({ success: false, error: 'exercise_kind inválido. Valores: ' + KINDS.join(', ') });
+    }
+
+    // ── RBAC: verificar que el paciente está activamente vinculado al
+    // terapeuta autenticado. Sin esto, un terapeuta autenticado cualquiera
+    // podría inyectar assignments (incluidos esquemas clínicos con datos
+    // sensibles encriptados posteriormente) en el historial de un paciente
+    // que NO es suyo. La PHI solo es legible para el terapeuta vinculado
+    // via la ROW therapist_patients.status='active', pero el INSERT sin
+    // check crea filas que impactan métricas/búsquedas del paciente
+    // objetivo y ensucian su historial clínico.
+    //
+    // Patrón ya usado en GET /patients/:id (mismo archivo, ~línea 540):
+    // 404 si no hay vínculo activo. Usamos 404 (no 403) para no filtrar
+    // la existencia del paciente a terceros (side-channel defense).
+    const pool0 = getPool();
+    const { rows: connRows0 } = await pool0.query(
+      "SELECT id FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
+      [req.user.id, patientId]
+    );
+    if (connRows0.length === 0) {
+      return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+    }
+
+    // Resolver el schema efectivo (BD gana si trae fields válido, si no
+    // estático con los discriminantes). Para 'classic' forzamos null.
+    let resolvedSchema = null;
+    if (exercise_kind !== 'classic') {
+      resolvedSchema = getSchema(exercise_kind, clientSchema, { mode, phobia });
+      if (!resolvedSchema) {
+        return res.status(400).json({ success: false, error: 'schema no encontrado para ' + exercise_kind });
+      }
+    }
 
     const pool = getPool();
     const assignId = uuidv4();
     await pool.query(
-      'INSERT INTO assignments (id, therapist_id, patient_id, type, title, instructions, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [assignId, req.user.id, patientId, type, title, encrypt(instructions), due_date || null]
+      'INSERT INTO assignments (id, therapist_id, patient_id, type, title, instructions, due_date, exercise_kind, exercise_schema) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [assignId, req.user.id, patientId, type, title, encrypt(instructions), due_date || null, exercise_kind, resolvedSchema ? JSON.stringify(resolvedSchema) : null]
     );
 
-    auditChange(req, 'create_assignment', 'assignment', assignId, { patientId, type, title });
+    auditChange(req, 'create_assignment', 'assignment', assignId, { patientId, type, title, exercise_kind });
 
     const dueMsg = due_date ? ' (vence: ' + new Date(due_date).toLocaleDateString('es-ES') + ')' : '';
     // await: ver comentario en POST /patients/:id/messages arriba. La unica
@@ -875,51 +926,172 @@ router.get('/task-templates', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── SCHEMAS DE EJERCICIOS CLÍNICOS ────────────────────────────
+// Devuelve la definición del schema efectivo para `kind` + discriminants.
+// El terapeuta lo consume cuando crea una plantilla clínica, para que el
+// paciente reciba un formulario interactivo (no solo instrucciones en texto).
+//
+//   ?kind=behavioral_activation&mode=diary     → BA diario
+//   ?kind=behavioral_activation&mode=schedule  → BA plan semanal
+//   ?kind=graded_exposure&phobia=agoraphobia   → GE agorafobia
+//   ?kind=graded_exposure&phobia=social_anxiety → GE ansiedad social
+//   ?kind=graded_exposure&phobia=claustrophobia → GE claustrofobia
+//   ?kind=thought_record                        → TR Beck
+//
+// Para 'classic' devolvemos 400: no tiene schema, el paciente solo recibe
+// instrucciones de texto y marca completada (caso legacy preservado por
+// default en migration 007). La resolución sigue la prioridad de
+// utils/exerciseSchemas.js → getSchema(): BD gana, estático fallback.
+router.get('/exercise-schemas', authenticateToken, async (req, res) => {
+  try {
+    const { kind, mode, phobia } = req.query;
+    if (!kind) {
+      return res.status(400).json({ success: false, error: 'kind requerido (thought_record | behavioral_activation | graded_exposure)' });
+    }
+    if (!KINDS.includes(kind)) {
+      return res.status(400).json({ success: false, error: 'kind inválido. Valores: ' + KINDS.join(', ') });
+    }
+    if (kind === 'classic') {
+      return res.status(400).json({ success: false, error: 'classic no tiene schema (instrucciones en texto plano)' });
+    }
+    const schema = getSchema(kind, null, { mode, phobia });
+    if (!schema) {
+      return res.status(404).json({ success: false, error: 'schema no encontrado para ' + kind });
+    }
+    res.json({ success: true, kind, mode: mode || null, phobia: phobia || null, schema });
+  } catch (err) {
+    logger.error('Error cargando exercise-schema', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error al cargar schema' });
+  }
+});
+
 router.post('/task-templates', authenticateToken, async (req, res) => {
   try {
-    const { category, title, instructions, difficulty = 'media', duration_min = 30 } = req.body;
+    const {
+      category, title, instructions,
+      difficulty = 'media', duration_min = 30,
+      // Nuevos (migration 007): si el terapeuta elige un kind clínico,
+      // ejercicio_schema es opcional. Si no viene, resolvemos el estático
+      // desde utils/exerciseSchemas.js usando los discriminantes. Si el
+      // cliente manda un schema custom, validamos que tenga `fields` válido
+      // y se prefiere sobre el estático (la BD es source-of-truth clínico).
+      exercise_kind = 'classic', exercise_schema: clientSchema = null,
+      // Discriminantes para que el terapeuta elija entre BA diary vs
+      // schedule y entre las 3 fobias de GE ya en el form de creación.
+      mode = null, phobia = null,
+    } = req.body;
     if (!category || !title || !instructions) return res.status(400).json({ success: false, error: 'Categoria, titulo e instrucciones requeridos' });
     if (!['baja', 'media', 'alta'].includes(difficulty)) return res.status(400).json({ success: false, error: 'Dificultad: baja, media o alta' });
+    if (!KINDS.includes(exercise_kind)) {
+      return res.status(400).json({ success: false, error: 'exercise_kind inválido. Valores: ' + KINDS.join(', ') });
+    }
+
+    // Para kinds clínicos resolvemos el schema efectivo (BD si trae fields
+    // válidos, estático en otro caso). Para 'classic' forzamos schema=NULL.
+    let resolvedSchema = null;
+    if (exercise_kind !== 'classic') {
+      resolvedSchema = getSchema(exercise_kind, clientSchema, { mode, phobia });
+      if (!resolvedSchema) {
+        return res.status(400).json({ success: false, error: 'schema no encontrado para ' + exercise_kind });
+      }
+    }
 
     const pool = getPool();
     const id = uuidv4();
     await pool.query(
-      'INSERT INTO task_templates (id, therapist_id, category, title, instructions, difficulty, duration_min) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [id, req.user.id, category.trim(), title.trim(), instructions.trim(), difficulty, duration_min]
+      'INSERT INTO task_templates (id, therapist_id, category, title, instructions, difficulty, duration_min, exercise_kind, exercise_schema) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [id, req.user.id, category.trim(), title.trim(), instructions.trim(), difficulty, duration_min, exercise_kind, resolvedSchema ? JSON.stringify(resolvedSchema) : null]
     );
-    res.json({ success: true, template: { id, therapist_id: req.user.id, category: category.trim(), title: title.trim(), instructions: instructions.trim(), difficulty, duration_min } });
+    res.json({
+      success: true,
+      template: {
+        id, therapist_id: req.user.id,
+        category: category.trim(), title: title.trim(), instructions: instructions.trim(),
+        difficulty, duration_min,
+        exercise_kind,
+        // Devolvemos el schema efectivo para que el cliente pueda pintar el
+        // formulario interactivo sin round-trip extra. La BD guarda el mismo
+        // JSON. Para classic queda explícitamente null.
+        exercise_schema: resolvedSchema,
+      }
+    });
   } catch (err) {
+    // 23514 (check_violation) si por alguna razón se cuela un kind que
+    // burla el filtro en memoria; 42703 si la columna no existe (migration
+    // 007 no aplicada). Mensaje accionable para el usuario final.
     logger.error('Error creando template', { error: err.message });
-    res.status(500).json({ success: false });
+    let errorMessage = 'Error al crear plantilla';
+    if (err && err.code === '23514' && err.message && /exercise_kind/i.test(err.message)) {
+      errorMessage = 'La CHECK constraint de exercise_kind rechazó el valor. Verifica que kind esté en la whitelist del backend.';
+    } else if (err && err.code === '42703' && err.message && /exercise_kind|exercise_schema/i.test(err.message)) {
+      errorMessage = 'Las columnas exercise_kind/exercise_schema no existen. Pídele a soporte técnico que corra migrations/007_embedded_exercises.sql';
+    }
+    res.status(500).json({ success: false, error: errorMessage });
   }
 });
 
 router.put('/task-templates/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { category, title, instructions, difficulty, duration_min } = req.body;
+    const {
+      category, title, instructions, difficulty, duration_min,
+      // Update de exercise_kind/schema: si vienen, validamos y re-resolvemos.
+      exercise_kind, exercise_schema: clientSchema,
+      mode, phobia,
+    } = req.body;
     const pool = getPool();
     const { rows: tmplRows } = await pool.query('SELECT * FROM task_templates WHERE id = $1 AND therapist_id = $2', [id, req.user.id]);
     if (tmplRows.length === 0) return res.status(404).json({ success: false, error: 'Plantilla no encontrada' });
 
     if (difficulty && !['baja', 'media', 'alta'].includes(difficulty)) return res.status(400).json({ success: false, error: 'Dificultad: baja, media o alta' });
+    if (exercise_kind !== undefined && !KINDS.includes(exercise_kind)) {
+      return res.status(400).json({ success: false, error: 'exercise_kind inválido. Valores: ' + KINDS.join(', ') });
+    }
 
     const tmpl = tmplRows[0];
+    const finalKind = exercise_kind !== undefined ? exercise_kind : tmpl.exercise_kind || 'classic';
+    let finalSchema = tmpl.exercise_schema || null;
+    if (finalKind !== 'classic') {
+      // El terapeuta está editando a un kind clínico (o manteniéndolo):
+      // re-resolver. Si trae clientSchema, BD gana; si no, estático.
+      finalSchema = getSchema(finalKind, clientSchema !== undefined ? clientSchema : tmpl.exercise_schema, {
+        mode: mode !== undefined ? mode : (tmpl.exercise_schema && tmpl.exercise_schema.mode),
+        phobia: phobia !== undefined ? phobia : (tmpl.exercise_schema && tmpl.exercise_schema.phobia),
+      });
+      if (!finalSchema) {
+        return res.status(400).json({ success: false, error: 'schema no encontrado para ' + finalKind });
+      }
+    } else {
+      // Forzamos null para 'classic' (migration 007 deja el campo nullable pero
+      // mantenerlo limpio evita ruido).
+      finalSchema = null;
+    }
+
     const fields = {
-      category: (category || tmpl.category).trim(),
-      title: (title || tmpl.title).trim(),
-      instructions: (instructions || tmpl.instructions).trim(),
-      difficulty: difficulty || tmpl.difficulty,
+      category: (category !== undefined ? category : tmpl.category).trim(),
+      title: (title !== undefined ? title : tmpl.title).trim(),
+      instructions: (instructions !== undefined ? instructions : tmpl.instructions).trim(),
+      difficulty: difficulty !== undefined ? difficulty : tmpl.difficulty,
       duration_min: duration_min !== undefined ? duration_min : tmpl.duration_min,
+      exercise_kind: finalKind,
+      exercise_schema: finalSchema ? JSON.stringify(finalSchema) : null,
     };
     await pool.query(
-      'UPDATE task_templates SET category=$1, title=$2, instructions=$3, difficulty=$4, duration_min=$5 WHERE id=$6 AND therapist_id=$7',
-      [fields.category, fields.title, fields.instructions, fields.difficulty, fields.duration_min, id, req.user.id]
+      'UPDATE task_templates SET category=$1, title=$2, instructions=$3, difficulty=$4, duration_min=$5, exercise_kind=$6, exercise_schema=$7 WHERE id=$8 AND therapist_id=$9',
+      [fields.category, fields.title, fields.instructions, fields.difficulty, fields.duration_min, fields.exercise_kind, fields.exercise_schema, id, req.user.id]
     );
-    res.json({ success: true, template: { id, therapist_id: req.user.id, ...fields } });
+    res.json({
+      success: true,
+      template: { id, therapist_id: req.user.id,
+        category: fields.category, title: fields.title, instructions: fields.instructions,
+        difficulty: fields.difficulty, duration_min: fields.duration_min,
+        exercise_kind: fields.exercise_kind,
+        exercise_schema: finalSchema,
+      },
+    });
   } catch (err) {
     logger.error('Error actualizando template', { error: err.message });
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, error: 'Error al actualizar plantilla' });
   }
 });
 

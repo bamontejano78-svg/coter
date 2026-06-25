@@ -675,6 +675,11 @@ function renderTemplates(){
     const isCustom=!!t.therapist_id;
     const cardClass=isCustom?'template-card custom-template':'template-card system-template';
     const customBadge=isCustom?'<span class="custom-badge">⭐ Tuya</span>':'';
+    // Badge clínico: muestra cuando el template NO es 'classic' para que
+    // el terapeuta vea de un vistazo qué templates daran al paciente un
+    // formulario interactivo (TR/BA/GE con respuestas encriptadas).
+    const kindBadgeText = templateKindBadge(t);
+    const kindBadge = kindBadgeText ? '<span class="clinical-kind-badge">' + sanitizeHTML(kindBadgeText) + '</span>' : '';
     const actionButtons=isCustom
       ?`<button class="btn btn-p btn-sm btn-toggle-template" data-template-id="${t.id}">📖 Ver</button>
          <button class="btn btn-w btn-sm btn-edit-template" data-template-id="${t.id}">✏️ Editar</button>
@@ -683,7 +688,7 @@ function renderTemplates(){
       :`<button class="btn btn-p btn-sm btn-toggle-template" data-template-id="${t.id}">📖 Ver instrucciones</button>
          <button class="btn btn-s btn-sm btn-assign-template" data-template-id="${t.id}">📋 Asignar a paciente</button>`;
     return`<div class="${cardClass}" id="tcard-${t.id}" style="animation-delay:${i*.05}s">
-      <div class="template-category">${sanitizeHTML(t.category)}${customBadge}</div>
+      <div class="template-category">${sanitizeHTML(t.category)}${customBadge}${kindBadge}</div>
       <div class="template-title">${sanitizeHTML(t.title)}</div>
       <div class="template-meta">
         <span class="template-difficulty diff-${t.difficulty}">${t.difficulty==='baja'?'🟢 Fácil':t.difficulty==='media'?'🟡 Media':'🔴 Avanzada'}</span>
@@ -741,8 +746,38 @@ async function assignTemplateToPatient(templateId){
   const {value:pId}=await Swal.fire({title:'Asignar a paciente',text:`Tarea: ${template.title}`,input:'select',inputOptions:options,inputPlaceholder:'Selecciona un paciente...',showCancelButton:true,confirmButtonText:'Asignar',cancelButtonText:'Cancelar'});
   if(!pId)return;
   try{
-    await api(`${API}/therapists/patients/${pId}/assignments`,{method:'POST',body:JSON.stringify({type:template.category,title:template.title,instructions:template.instructions})});
-    Swal.fire({title:'✅ Tarea asignada',text:`"${template.title}" asignada al paciente`,icon:'success',timer:2000,showConfirmButton:false});
+    // Propagamos exercise_kind + discriminants (mode/phobia) desde la plantilla
+    // a la asignación. Para 'classic' eso es ruido pero cumple contrato.
+    // El backend (POST /patients/:id/assignments) re-resuelve el schema
+    // efectivo con getSchema(kind, dbSchema, {mode, phobia}) y lo congela
+    // en assignments.exercise_schema. Asi, si el terapeuta edita la plantilla
+    // después, el paciente sigue viendo el schema de su tarea original.
+    const exerciseKind = template.exercise_kind || 'classic';
+    const mode = (template.exercise_schema && template.exercise_schema.mode) || null;
+    const phobia = (template.exercise_schema && template.exercise_schema.phobia) || null;
+    const body = {
+      type: template.category,
+      title: template.title,
+      instructions: template.instructions,
+      exercise_kind: exerciseKind,
+      mode: mode,
+      phobia: phobia,
+    };
+    await api(`${API}/therapists/patients/${pId}/assignments`,{method:'POST',body:JSON.stringify(body)});
+    const isClinical = window.ExerciseForms && typeof window.ExerciseForms.isClinicalKind === 'function'
+      ? window.ExerciseForms.isClinicalKind(exerciseKind)
+      : (exerciseKind && exerciseKind !== 'classic');
+    if (isClinical) {
+      // guidance puede llegar null/empty desde el backend. Cortamos la primera
+      // oración defensivamente sin asumir separador; si por BD corrupto
+      // llegara solo "." o vacio, mostramos el fallback y no un string roto.
+      const rawGuidance = (template.exercise_schema && template.exercise_schema.guidance) || '';
+      const firstSentence = rawGuidance.split('.')[0] || '';
+      const guidanceText = firstSentence ? `${firstSentence.trim()}.` : 'El paciente verá un formulario interactivo con el schema clínico.';
+      Swal.fire({title:'✅ Tarea clínica asignada',text:`"${template.title}". ${sanitizeHTML(guidanceText)}`,icon:'success',timer:2400,showConfirmButton:false});
+    } else {
+      Swal.fire({title:'✅ Tarea asignada',text:`"${template.title}" asignada al paciente`,icon:'success',timer:2000,showConfirmButton:false});
+    }
   }catch(e){
     console.error('[assignTemplateToPatient] asignación falló:',e);
     Swal.fire('Error','No se pudo asignar la tarea','error');
@@ -750,7 +785,46 @@ async function assignTemplateToPatient(templateId){
 }
 
 // ==================== PLANTILLAS PERSONALIZADAS (CRUD) ====================
+// Map: option value en el select de "Tipo de ejercicio" → { kind, mode?, phobia? }
+// Se usa tambien para mostrar un nombre legible en el badge de la tarjeta.
+// Mantener sincronizado con utils/exerciseSchemas.js KINDS + discriminantes.
+const TEMPLATE_KIND_OPTIONS = [
+  { value: 'classic',                  label: '📝 Texto plano (instrucciones simples, el paciente solo marca completada)',           kind: 'classic',                  badge: '' },
+  { value: 'thought_record',           label: '🧠 Thought Record (Beck) — el paciente rellena 8 pasos con emociones y distorsiones', kind: 'thought_record',           badge: '🧠 Beck' },
+  { value: 'ba_diary',                 label: '🎯 Activación Conductual — Diario (Lewinsohn): placer/logro por actividad',            kind: 'behavioral_activation',    mode: 'diary',    badge: '🎯 BA diario' },
+  { value: 'ba_schedule',              label: '🎯 Activación Conductual — Plan semanal (Jacobson): programar y reflexionar',         kind: 'behavioral_activation',    mode: 'schedule', badge: '🎯 BA semanal' },
+  { value: 'ge_agoraphobia',           label: '🚶 Exposición gradual — Agorafobia (Marks)',                                            kind: 'graded_exposure',          phobia: 'agoraphobia',    badge: '🚶 GE agorafobia' },
+  { value: 'ge_social_anxiety',        label: '🚶 Exposición gradual — Ansiedad social (McNally)',                                      kind: 'graded_exposure',          phobia: 'social_anxiety', badge: '🚶 GE ansiedad social' },
+  { value: 'ge_claustrophobia',        label: '🚶 Exposición gradual — Claustrofobia (Marks)',                                          kind: 'graded_exposure',          phobia: 'claustrophobia', badge: '🚶 GE claustrofobia' },
+];
+function getTemplateKindOption(value) {
+  return TEMPLATE_KIND_OPTIONS.find(o => o.value === value) || TEMPLATE_KIND_OPTIONS[0];
+}
+function templateKindBadge(t) {
+  // Para templates del sistema (therapist_id IS NULL) el backend ya conoce
+  // su kind y schema. Para templates custom del terapeuta, igual.
+  // Devuelve un string corto para el badge o '' si classic.
+  // Idempotente a null vs undefined: la BD puede serializar mode/phobia como
+  // null cuando no aplica, y los matches estructurales requieren comparación
+  // tolerante para que TEMPLATE_KIND_OPTIONS encuentre la variante exacta.
+  if (!t || !t.exercise_kind || t.exercise_kind === 'classic') return '';
+  const sch = t.exercise_schema || {};
+  const schemaMode = sch.mode == null ? undefined : sch.mode;
+  const schemaPhobia = sch.phobia == null ? undefined : sch.phobia;
+  const opt = TEMPLATE_KIND_OPTIONS.find(o =>
+    o.kind === t.exercise_kind &&
+    (o.mode === undefined ? schemaMode === undefined : o.mode === schemaMode) &&
+    (o.phobia === undefined ? schemaPhobia === undefined : o.phobia === schemaPhobia)
+  );
+  return (opt && opt.badge) || t.exercise_kind;
+}
+
 function showCreateTemplate(){
+  // Render del <select> con las 7 opciones. Usamos innerHTML controlado
+  // (sin values de usuario) para evitar XSS; los labels son hardcodeados.
+  const kindOptionsHtml = TEMPLATE_KIND_OPTIONS.map(o =>
+    '<option value="' + o.value + '">' + sanitizeHTML(o.label) + '</option>'
+  ).join('');
   Swal.fire({title:'Crear nueva plantilla',html:`
     <label class="soap-label">Categoría</label>
     <input id="swalTmplCat" class="swal2-input" placeholder="Ej: 🧘 Respiración guiada">
@@ -758,21 +832,56 @@ function showCreateTemplate(){
     <input id="swalTmplTitle" class="swal2-input" placeholder="Título de la tarea">
     <label class="soap-label">Instrucciones</label>
     <textarea id="swalTmplInstructions" class="swal2-textarea" placeholder="Instrucciones detalladas..." rows="4"></textarea>
+    <label class="soap-label">Tipo de ejercicio</label>
+    <select id="swalTmplKind" class="swal2-input">${kindOptionsHtml}</select>
+    <p class="swal-kind-hint" id="swalKindHint" style="margin:6px 0 10px;font-size:12px;color:var(--muted);text-align:left">📝 Texto plano: el paciente solo recibe instrucciones y marca “completada”.</p>
     <label class="soap-label">Dificultad</label>
     <select id="swalTmplDifficulty" class="swal2-input"><option value="baja">🟢 Fácil</option><option value="media" selected>🟡 Media</option><option value="alta">🔴 Avanzada</option></select>
     <label class="soap-label">Duración (minutos)</label>
     <input id="swalTmplDuration" class="swal2-input" type="number" value="30" min="5" max="180">
-  `,showCancelButton:true,confirmButtonText:'Crear plantilla',cancelButtonText:'Cancelar',width:600,preConfirm:async()=>{
+  `,showCancelButton:true,confirmButtonText:'Crear plantilla',cancelButtonText:'Cancelar',width:600,didOpen:()=>{
+    // didOpen corre cuando el DOM de SweetAlert2 ya está listo: enganchamos
+    // el change handler del select de kind para refrescar el hint contextual.
+    // Sin esto el usuario no sabe por qué “Thought Record” vs “BA Diario” son
+    // diferentes (el schema que recibirá el paciente).
+    const sel = document.getElementById('swalTmplKind');
+    const hint = document.getElementById('swalKindHint');
+    function refreshHint() {
+      const opt = getTemplateKindOption(sel.value);
+      const hints = {
+        classic: '📝 Texto plano: el paciente solo recibe instrucciones y marca “completada”.',
+        thought_record: '🧠 Thought Record (Beck): el paciente rellena situación → pensamiento automático → emoción → distorsión → evidencia → reencuadre. 8 pasos con respuestas encriptadas (PHI).',
+        ba_diary: '🎯 BA Diario (Lewinsohn): cada actividad lleva placer (P) y logro (L) 0–10. Sugerencias integradas.',
+        ba_schedule: '🎯 BA Plan semanal (Jacobson): programa la semana domingo-noche, con obstáculos y plan B.',
+        ge_agoraphobia: '🚶 Exposición gradual de 8 pasos (Marks 1978). SUDS 0–100 registrado en cada sesión.',
+        ge_social_anxiety: '🚶 Exposición gradual de 7 pasos (McNally 2007). Quita comportamientos de seguridad.',
+        ge_claustrophobia: '🚶 Exposición gradual de 7 pasos (Marks). Habitúate hasta que SUDS baje.',
+      };
+      if (hint) hint.textContent = hints[sel.value] || hints.classic;
+    }
+    if (sel) sel.addEventListener('change', refreshHint);
+    refreshHint();
+  },preConfirm:async()=>{
     const category=document.getElementById('swalTmplCat').value.trim();
     const title=document.getElementById('swalTmplTitle').value.trim();
     const instructions=document.getElementById('swalTmplInstructions').value.trim();
     const difficulty=document.getElementById('swalTmplDifficulty').value;
     const duration=parseInt(document.getElementById('swalTmplDuration').value)||30;
     if(!category||!title||!instructions){Swal.showValidationMessage('Categoría, título e instrucciones son obligatorios');return false;}
+    const opt = getTemplateKindOption(document.getElementById('swalTmplKind').value);
     try{
-      const r=await api(`${API}/therapists/task-templates`,{method:'POST',body:JSON.stringify({category,title,instructions,difficulty,duration_min:duration})});
+      // El backend resuelve el schema efectivo desde utils/exerciseSchemas.js
+      // a partir de (kind, mode, phobia). Para 'classic' persiste schema=NULL.
+      // El cliente NO necesita mandar `exercise_schema` adivinando estructura;
+      // basta con kind + discriminant.
+      const r=await api(`${API}/therapists/task-templates`,{method:'POST',body:JSON.stringify({
+        category,title,instructions,difficulty,duration_min:duration,
+        exercise_kind: opt.kind,
+        mode: opt.mode || null,
+        phobia: opt.phobia || null,
+      })});
       const d=await r.json();
-      if(d.success){templates.unshift(d.template);renderTemplates();renderCategoryFilters();Swal.fire({title:'✅ Plantilla creada',icon:'success',timer:1500,showConfirmButton:false});}
+      if(d.success){templates.unshift(d.template);renderTemplates();renderCategoryFilters();Swal.fire({title:'✅ Plantilla creada',text: opt.kind === 'classic' ? 'Plantilla clásica guardada' : 'Plantilla clínica guardada: el paciente verá un formulario interactivo.',icon:'success',timer:1800,showConfirmButton:false});}
       else Swal.showValidationMessage(d.error||'Error al crear');
     }catch(e){Swal.showValidationMessage('Error de conexión');}
   }});
