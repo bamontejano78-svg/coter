@@ -16,6 +16,7 @@
 
 const {
   KINDS,
+  FIELD_TYPES,
   SCHEMAS_BY_KIND,
   BEHAVIORAL_ACTIVATION_SCHEMAS,
   GRADED_EXPOSURE_SCHEMAS,
@@ -27,6 +28,7 @@ const {
   GE_CLAUSTROPHOBIA_SCHEMA,
   getSchema,
   validateResponses,
+  validateSchemaDefinition,
   getSensitiveFieldPaths,
   SCHEMA_VERSION,
 } = require('../utils/exerciseSchemas');
@@ -444,5 +446,213 @@ describe('getSensitiveFieldPaths', () => {
       ],
     };
     expect(getSensitiveFieldPaths(schema).length).toBe(0);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// validateSchemaDefinition — valida SCHEMAS personalizados del editor clínico.
+// Usado por routes/therapist.js PUT /task-templates/:id y POST /task-templates
+// cuando el terapeuta envia un schema custom (no solo el kind). Cubre:
+//   · Rechazo de classic (no_classic_schema)
+//   · Validación de fields[] (vacío, solo repeaters, keys dup, tipo inválido)
+//   · Reglas por tipo (select options[], number/scale min<max)
+//   · Re-inyección de system roots (distortion_catalog/hierarchy/suggested_activities)
+//   · Validación de discriminants (mode/phobia consistentes con kind)
+// ═════════════════════════════════════════════════════════════════════════
+describe('FIELD_TYPES whitelist', () => {
+  test('exports the nine documented field types for the clinical editor', () => {
+    expect(new Set(FIELD_TYPES)).toEqual(new Set([
+      'text', 'textarea', 'number', 'scale', 'select', 'multi_select', 'boolean', 'date', 'repeater',
+    ]));
+  });
+  test('is frozen (no cliente puede mutar el set)', () => {
+    expect(Object.isFrozen(FIELD_TYPES)).toBe(true);
+  });
+});
+
+describe('validateSchemaDefinition', () => {
+  test('classic kind: no_classic_schema (los kinds clásicos solo aceptan instrucciones en texto)', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'x', type: 'text', label: 'X' }] }, 'classic');
+    expect(r.valid).toBe(false);
+    expect(r.errors[0].code).toBe('no_classic_schema');
+    expect(r.schema).toBeNull();
+  });
+
+  test('null/undefined/no_object: invalid input', () => {
+    expect(validateSchemaDefinition(null, 'thought_record').valid).toBe(false);
+    expect(validateSchemaDefinition(undefined, 'thought_record').valid).toBe(false);
+    expect(validateSchemaDefinition([], 'thought_record').valid).toBe(false);
+  });
+
+  test('empty fields[]: empty_fields', () => {
+    const r = validateSchemaDefinition({ fields: [] }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'empty_fields')).toBe(true);
+  });
+
+  test('only repeater fields: rejects con no_top_level_response_field', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'log', type: 'repeater', label: 'Log' }] }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'no_top_level_response_field')).toBe(true);
+  });
+
+  test('invalid snake_case key format: invalid_key', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'A-Bad-Key', type: 'text', label: 'L' }] }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'invalid_key' && e.path === 'fields[0].key')).toBe(true);
+  });
+
+  test('duplicate keys across fields: duplicate_key', () => {
+    const r = validateSchemaDefinition({
+      fields: [
+        { key: 'mood', type: 'scale', label: 'Mood' },
+        { key: 'mood', type: 'text', label: 'Mood again' },
+      ],
+    }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'duplicate_key')).toBe(true);
+  });
+
+  test('invalid type: invalid_type', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'x', type: 'bogus_type', label: 'L' }] }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors[0].code).toBe('invalid_type');
+  });
+
+  test('number/scale con min >= max: min_ge_max', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'score', type: 'scale', label: 'S', min: 10, max: 5 }] }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors[0].code).toBe('min_ge_max');
+  });
+
+  test('select sin source requiere options[] no vacío', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'pick', type: 'select', label: 'P', options: [] }] }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'empty_options')).toBe(true);
+  });
+
+  test('select options[] mixtos string+{key,label} sin keys duplicados: valid', () => {
+    const r = validateSchemaDefinition({
+      fields: [{
+        key: 'pick', type: 'select', label: 'P',
+        options: ['low', { key: 'mid', label: 'Medium' }, 'high'],
+      }],
+    }, 'thought_record');
+    expect(r.valid).toBe(true);
+  });
+
+  test('select con source: options[] NO se valida (lo resuelve el cliente)', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'distortions', type: 'multi_select', source: 'catalog', label: 'D' }] }, 'thought_record');
+    expect(r.errors.filter(e => e.path === 'fields[0].options')).toEqual([]);
+  });
+
+  test('repeater.fields[] vacío: empty_repeater', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'log', type: 'repeater', label: 'L', fields: [] }] }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'empty_repeater')).toBe(true);
+  });
+
+  test('repeater con sub-key duplicado: duplicate_subkey', () => {
+    const r = validateSchemaDefinition({
+      fields: [{ key: 'log', type: 'repeater', label: 'L', fields: [
+        { key: 'txt', type: 'text' },
+        { key: 'txt', type: 'textarea' },
+      ] }],
+    }, 'thought_record');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'duplicate_subkey')).toBe(true);
+  });
+
+  test('happy path THOUGHT_RECORD: re-inyecta distortion_catalog y schema_version', () => {
+    const definition = {
+      fields: [
+        { key: 'situation', type: 'textarea', label: 'Situación', required: true, sensitive: true },
+        { key: 'automatic_thought', type: 'textarea', label: 'Pensamiento', required: true, sensitive: true },
+        { key: 'somatic_impact', type: 'text', label: 'Impacto somático (custom)' },
+      ],
+      guidance: 'Texto terapéutico del terapeuta',
+    };
+    const r = validateSchemaDefinition(definition, 'thought_record');
+    expect(r.valid).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.schema.schema_version).toBe(1);
+    expect(Array.isArray(r.schema.distortion_catalog)).toBe(true);
+    expect(r.schema.distortion_catalog.length).toBeGreaterThanOrEqual(12);
+    expect(r.schema.fields.length).toBe(3);
+    // System nunca toma del cliente (aunque venga manipulado, server lo sobreescribe)
+    expect(r.schema.fields.find(f => f.key === 'situation').sensitive).toBe(true);
+    expect(r.schema.guidance).toBe('Texto terapéutico del terapeuta');
+  });
+
+  test('happy path behavioral_activation schedule: mode inyectado + suggested_activities', () => {
+    const definition = {
+      mode: 'schedule',
+      fields: [
+        { key: 'day', type: 'select', label: 'Día', required: true, options: ['Lunes', 'Martes'] },
+        { key: 'activity_simple', type: 'text', label: 'Actividad simple' },
+      ],
+      guidance: '',
+    };
+    const r = validateSchemaDefinition(definition, 'behavioral_activation');
+    expect(r.valid).toBe(true);
+    expect(r.schema.mode).toBe('schedule');
+    expect(Array.isArray(r.schema.suggested_activities)).toBe(true);
+    expect(r.schema.suggested_activities.length).toBeGreaterThan(10);
+  });
+
+  test('happy path graded_exposure agoraphobia: hierarchy inyectado', () => {
+    const definition = {
+      phobia: 'agoraphobia',
+      fields: [
+        { key: 'step_picked', type: 'select', source: 'hierarchy', label: 'Nº paso', required: true },
+        { key: 'suds_pre', type: 'scale', label: 'SUDS antes', min: 0, max: 100, required: true },
+      ],
+    };
+    const r = validateSchemaDefinition(definition, 'graded_exposure');
+    expect(r.valid).toBe(true);
+    expect(r.schema.phobia).toBe('agoraphobia');
+    expect(Array.isArray(r.schema.hierarchy)).toBe(true);
+    expect(r.schema.hierarchy.length).toBeGreaterThanOrEqual(8);
+  });
+
+  test('cliente intenta borrar distortion_catalog del sistema: server lo re-inyecta (cliente no tiene control sobre el catalog)', () => {
+    const r = validateSchemaDefinition({
+      fields: [{ key: 'x', type: 'text', label: 'X' }],
+      distortion_catalog: [], // intento malicioso
+    }, 'thought_record');
+    expect(r.valid).toBe(true);
+    expect(r.schema.distortion_catalog.length).toBeGreaterThan(0);
+  });
+
+  test('cliente envía mode inválido para BA: cai a default diary', () => {
+    const r = validateSchemaDefinition({
+      mode: 'hacky',
+      fields: [{ key: 'a', type: 'text', label: 'A' }],
+    }, 'behavioral_activation');
+    expect(r.valid).toBe(true);
+    expect(r.schema.mode).toBe('diary');
+  });
+
+  test('cliente envia phobia inválida para GE: cae a agoraphobia (default conservador)', () => {
+    const r = validateSchemaDefinition({
+      phobia: 'aerophobia', // no existe
+      fields: [{ key: 'a', type: 'text', label: 'A' }],
+    }, 'graded_exposure');
+    expect(r.valid).toBe(true);
+    expect(r.schema.phobia).toBe('agoraphobia');
+  });
+
+  test('unknown kind: unknown_kind', () => {
+    const r = validateSchemaDefinition({ fields: [{ key: 'x', type: 'text', label: 'X' }] }, 'not_a_real_kind');
+    expect(r.valid).toBe(false);
+    expect(r.errors.some(e => e.code === 'unknown_kind')).toBe(true);
+  });
+
+  test('client tries to set schema_version > 1: server overrides to 1 (canary contra drift migratorio)', () => {
+    const r = validateSchemaDefinition({
+      schema_version: 99,
+      fields: [{ key: 'x', type: 'text', label: 'X' }],
+    }, 'thought_record');
+    expect(r.schema.schema_version).toBe(1);
   });
 });

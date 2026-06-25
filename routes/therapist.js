@@ -14,7 +14,7 @@ const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = requir
 // y getSchema() (resuelve el schema efectivo para cada kind clínico,
 // incluyendo las discriminantes mode/phobia para BA y GE). Ver
 // /utils/exerciseSchemas.test.js para el contrato que esto mantiene.
-const { getSchema, KINDS } = require('../utils/exerciseSchemas');
+const { getSchema, validateSchemaDefinition, KINDS } = require('../utils/exerciseSchemas');
 const { createNotification } = require('../utils/notifications');
 const { audit, auditAccess, auditChange } = require('../utils/audit');
 const bus = require('../utils/eventBus');
@@ -634,13 +634,23 @@ router.post('/patients/:patientId/assignments', authenticateToken, async (req, r
       return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
     }
 
-    // Resolver el schema efectivo (BD gana si trae fields válido, si no
-    // estático con los discriminantes). Para 'classic' forzamos null.
+    // Resolver el schema efectivo. Para 'classic' forzamos null.
+    //   • Con clientSchema en body → validar (PUT del editor clínico).
+    //   • Sin clientSchema → getSchema() con discriminantes (create
+    //     desde catálogo estático).
     let resolvedSchema = null;
     if (exercise_kind !== 'classic') {
-      resolvedSchema = getSchema(exercise_kind, clientSchema, { mode, phobia });
-      if (!resolvedSchema) {
-        return res.status(400).json({ success: false, error: 'schema no encontrado para ' + exercise_kind });
+      if (clientSchema && typeof clientSchema === 'object' && !Array.isArray(clientSchema)) {
+        const v = validateSchemaDefinition(clientSchema, exercise_kind);
+        if (!v.valid) {
+          return res.status(422).json({ success: false, error: 'Schema inválido', errors: v.errors });
+        }
+        resolvedSchema = v.schema;
+      } else {
+        resolvedSchema = getSchema(exercise_kind, null, { mode, phobia });
+        if (!resolvedSchema) {
+          return res.status(400).json({ success: false, error: 'schema no encontrado para ' + exercise_kind });
+        }
       }
     }
 
@@ -1052,14 +1062,30 @@ router.put('/task-templates/:id', authenticateToken, async (req, res) => {
     const finalKind = exercise_kind !== undefined ? exercise_kind : tmpl.exercise_kind || 'classic';
     let finalSchema = tmpl.exercise_schema || null;
     if (finalKind !== 'classic') {
-      // El terapeuta está editando a un kind clínico (o manteniéndolo):
-      // re-resolver. Si trae clientSchema, BD gana; si no, estático.
-      finalSchema = getSchema(finalKind, clientSchema !== undefined ? clientSchema : tmpl.exercise_schema, {
-        mode: mode !== undefined ? mode : (tmpl.exercise_schema && tmpl.exercise_schema.mode),
-        phobia: phobia !== undefined ? phobia : (tmpl.exercise_schema && tmpl.exercise_schema.phobia),
-      });
-      if (!finalSchema) {
-        return res.status(400).json({ success: false, error: 'schema no encontrado para ' + finalKind });
+      // Tres paths posibles para el resolver el schema efectivo de la plantilla:
+      //   • clientSchema presente en body → validar estructura (PUT completo
+      //     desde el editor clínico del frontend). Rechaza con 422 si inválido.
+      //   • clientSchema ausente + kind clínico → preservar el schema actual
+      //     de la fila (ediciones a campos básicos: category/instructions/
+      //     difficulty/duration. NO toca exercise_schema).
+      //   • kind cambia entre clínico y classic → re-resolver o forzar null.
+      if (clientSchema !== undefined && clientSchema !== null && typeof clientSchema === 'object' && !Array.isArray(clientSchema)) {
+        const v = validateSchemaDefinition(clientSchema, finalKind);
+        if (!v.valid) {
+          return res.status(422).json({ success: false, error: 'Schema inválido', errors: v.errors });
+        }
+        finalSchema = v.schema;
+      } else if (finalSchema && finalSchema.schema_version) {
+        // Mantener el schema actual; no tocamos fields ni guidance aquí.
+        // Esto preserva el snapshot de la plantilla para asignaciones futuras.
+      } else {
+        finalSchema = getSchema(finalKind, null, {
+          mode: mode !== undefined ? mode : (tmpl.exercise_schema && tmpl.exercise_schema.mode),
+          phobia: phobia !== undefined ? phobia : (tmpl.exercise_schema && tmpl.exercise_schema.phobia),
+        });
+        if (!finalSchema) {
+          return res.status(400).json({ success: false, error: 'schema no encontrado para ' + finalKind });
+        }
       }
     } else {
       // Forzamos null para 'classic' (migration 007 deja el campo nullable pero

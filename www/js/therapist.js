@@ -869,6 +869,18 @@ function showCreateTemplate(){
     const duration=parseInt(document.getElementById('swalTmplDuration').value)||30;
     if(!category||!title||!instructions){Swal.showValidationMessage('Categoría, título e instrucciones son obligatorios');return false;}
     const opt = getTemplateKindOption(document.getElementById('swalTmplKind').value);
+    // Plantillas clínicas (TR/BA/GE): cerramos este modal básico y abrimos
+    // el editor clínico de 3 secciones (Básico + Tipo + Campos). El paciente
+    // verá un formulario interactivo, no solo instrucciones en texto plano.
+    if (opt.kind !== 'classic') {
+      Swal.close();
+      await openClinicalEditor({
+        mode: 'create',
+        prefill: { category, title, instructions, difficulty, duration_min: duration, kind: opt.kind, mode: opt.mode || null, phobia: opt.phobia || null }
+      });
+      // No confirmamos el modal actual; el editor emite su propio toast de éxito.
+      return false;
+    }
     try{
       // El backend resuelve el schema efectivo desde utils/exerciseSchemas.js
       // a partir de (kind, mode, phobia). Para 'classic' persiste schema=NULL.
@@ -881,14 +893,478 @@ function showCreateTemplate(){
         phobia: opt.phobia || null,
       })});
       const d=await r.json();
-      if(d.success){templates.unshift(d.template);renderTemplates();renderCategoryFilters();Swal.fire({title:'✅ Plantilla creada',text: opt.kind === 'classic' ? 'Plantilla clásica guardada' : 'Plantilla clínica guardada: el paciente verá un formulario interactivo.',icon:'success',timer:1800,showConfirmButton:false});}
+      if(d.success){templates.unshift(d.template);renderTemplates();renderCategoryFilters();Swal.fire({title:'✅ Plantilla creada',text:'Plantilla clásica guardada',icon:'success',timer:1800,showConfirmButton:false});}
       else Swal.showValidationMessage(d.error||'Error al crear');
     }catch(e){Swal.showValidationMessage('Error de conexión');}
   }});
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// EDITOR CLÍNICO — refinar campos del schema de TR/BA/GE desde el panel
+// ═══════════════════════════════════════════════════════════════════════
+// Por qué existe:
+//   Hasta este commit el terapeuta solo podía crear plantillas clínicas
+//   desde el form básico (elegir kind → backend resolvía el schema
+//   estático) y luego editarlas con un formulario de texto plano.
+//   Para refinar los campos (ej: añadir “Impacto somático” al Thought
+//   Record, cambiar las opciones del select, quitar un SUDS field) no
+//   había UI. Esta función abre un modal de 3 secciones: Básico, Tipo,
+//   Campos. Cada field es una .field-editor-row con type/key bloqueados
+//   (renombrarlos rompe asignaciones previas) y controles editables
+//   específicos por tipo (label, placeholder, required, sensitive,
+//   min/max para number/scale, options[] para select/multi_select).
+// Contrato:
+//   openClinicalEditor({mode:'create'|'edit', template?, prefill?})
+//     → resuelve a {saved:true,template} | null
+// ═══════════════════════════════════════════════════════════════════════
+
+// Defaults visuales por cada uno de los 9 tipos. Sirven para "Añadir field"
+// y para que el server entienda qué shape espera por tipo. El server valida
+// uno a uno y rechaza tipos fuera de FIELD_TYPES (utils/exerciseSchemas.js).
+const EDITOR_FIELD_TYPE_DEFAULTS = {
+  text:         { label:'Nuevo texto',               placeholder:'',                maxlength:500 },
+  textarea:     { label:'Nueva área de texto',       placeholder:'',                maxlength:2000 },
+  number:       { label:'Nuevo número',              min:0, max:100 },
+  scale:        { label:'Nueva escala (0–10)',       min:0, max:10 },
+  select:       { label:'Nueva selección',           options:[{key:'value', label:'Opción'}] },
+  multi_select: { label:'Nueva multi-selección',     options:[{key:'opt1', label:'Opción 1'}] },
+  boolean:      { label:'Nuevo sí/no' },
+  date:         { label:'Nueva fecha' },
+  repeater:     { label:'Nueva lista',               item_sensitive:false, fields:[{key:'entry', type:'text', label:'Entrada', sensitive:false}] },
+};
+
+// Builder de un row completo. mod = {fields:[...]}, idx = posición. Devuelve
+// HTML listo para .innerHTML. NO incluye bindings (ver bindEditorFieldRows).
+function renderEditorFieldRowHtml(field, mod, idx) {
+  const isSystem = !!(field && (field.source === 'catalog' || field.source === 'hierarchy'));
+  const type = field.type || 'text';
+  const safeLabel = sanitizeHTML(field.label || '');
+  const fieldKey = sanitizeHTML(field.key || '');
+  let bodyHtml = '';
+  // Cada tipo se renderiza con sus controles nativos. Los campos disabled son
+  // los que el server no aceptaría cambios (catalog/hierarchy) o los campos
+  // bloqueados por contrato (key, type).
+  if (type === 'text' || type === 'textarea') {
+    bodyHtml += '<div><label>Etiqueta</label><input data-bind="label" type="text" value="' + safeLabel + '"></div>'
+      + '<div><label>Placeholder</label><input data-bind="placeholder" type="text" value="' + sanitizeHTML(field.placeholder || '') + '"></div>'
+      + '<div class="checkbox-row">'
+      + '<label><input data-bind="required" type="checkbox"' + (field.required ? ' checked' : '') + '> Obligatorio</label>'
+      + '<label><input data-bind="sensitive" type="checkbox"' + (field.sensitive ? ' checked' : '') + '> <span title="Si está marcado, el contenido del paciente viaja encriptado en exercise_sessions.encrypted_blob">Contenido sensible (PHI)</span></label>'
+      + '</div>';
+  } else if (type === 'number' || type === 'scale') {
+    bodyHtml += '<div><label>Etiqueta</label><input data-bind="label" type="text" value="' + safeLabel + '"></div><div></div>'
+      + '<div><label>Mínimo</label><input data-bind="min" type="number" value="' + (field.min ?? 0) + '"></div>'
+      + '<div><label>Máximo</label><input data-bind="max" type="number" value="' + (field.max ?? 10) + '"></div>'
+      + '<div class="checkbox-row">'
+      + '<label><input data-bind="required" type="checkbox"' + (field.required ? ' checked' : '') + '> Obligatorio</label>'
+      + '<label><input data-bind="sensitive" type="checkbox"' + (field.sensitive ? ' checked' : '') + '> Contenido sensible</label>'
+      + '</div>';
+  } else if (type === 'select' || type === 'multi_select') {
+    const opts = Array.isArray(field.options) ? field.options : [];
+    let optsInner;
+    if (isSystem) {
+      // Catalog/hierarchy: el server inyecta las opciones. Mostramos un aviso
+      // y no permitimos editar porque cualquier manipulación romperá el form
+      // del paciente (los options[] no van en PUT del editor clínico).
+      optsInner = '<div class="system-only-notice">🔒 Sistema: las opciones las resuelve el servidor desde el catálogo de distorsiones (TR) o la jerarquía (GE). No son editables.</div>';
+    } else {
+      optsInner = opts.map((o, oi) => {
+        const optKey = typeof o === 'string' ? o : (o && o.key);
+        const optLabel = typeof o === 'string' ? o : (o && o.label);
+        return '<div class="option-row" data-opt-row="' + oi + '">'
+          + '<input data-opt-key="' + oi + '" type="text" value="' + sanitizeHTML(optKey) + '" placeholder="key">'
+          + '<input data-opt-label="' + oi + '" type="text" value="' + sanitizeHTML(optLabel) + '" placeholder="etiqueta">'
+          + '<button class="btn-mini btn-mini-danger" data-remove-opt="' + oi + '" type="button" title="Eliminar opción">✕</button>'
+          + '</div>';
+      }).join('') + '<div style="display:flex;gap:6px;margin-top:6px"><button class="btn-mini" data-add-opt type="button">+ Añadir opción</button></div>';
+    }
+    bodyHtml = '<div><label>Etiqueta</label><input data-bind="label" type="text" value="' + safeLabel + '"></div><div></div>'
+      + '<div class="full-row"><label>Opciones</label><div class="options-list-editor">' + optsInner + '</div></div>'
+      + '<div class="checkbox-row"><label><input data-bind="required" type="checkbox"' + (field.required ? ' checked' : '') + '> Obligatorio</label></div>';
+  } else if (type === 'boolean' || type === 'date') {
+    bodyHtml += '<div><label>Etiqueta</label><input data-bind="label" type="text" value="' + safeLabel + '"></div><div></div>'
+      + '<div class="checkbox-row"><label><input data-bind="required" type="checkbox"' + (field.required ? ' checked' : '') + '> Obligatorio</label></div>';
+  } else if (type === 'repeater') {
+    // v1: el repeater es "lista de sub-entradas". Las sub-entradas NO son
+    // editables desde este editor (sería recursion 2 niveles). Se muestra
+    // un resumen de las sub-fields pero solo meta (label/required/item_sensitive).
+    bodyHtml = '<div><label>Etiqueta</label><input data-bind="label" type="text" value="' + safeLabel + '"></div><div></div>'
+      + '<div class="full-row editor-help-text">🔁 Repeater: lista dinámica de entradas. Las sub-entradas (ej: emotions con name/intensity/body_location) no son editables en v1 — están fijadas por el schema del sistema.</div>'
+      + '<div class="checkbox-row">'
+      + '<label><input data-bind="required" type="checkbox"' + (field.required ? ' checked' : '') + '> Obligatorio</label>'
+      + '<label><input data-bind="item_sensitive" type="checkbox"' + (field.item_sensitive ? ' checked' : '') + '> Items sensibles (PHI)</label>'
+      + '</div>';
+  }
+  // system-only (catalog/hierarchy) rows are NOT re-ordenables: mover un
+  // row del sistema dentro del medio del array deja al paciente con un
+  // form raro donde un field opcional aparece entre campos requeridos.
+  const upDisabled = (isSystem || idx === 0) ? ' disabled' : '';
+  const downDisabled = (isSystem || idx === mod.fields.length - 1) ? ' disabled' : '';
+  const remAttr = isSystem ? ' title="Los fields del sistema no se pueden eliminar" disabled' : ' title="Eliminar field"';
+  return '<div class="field-editor-row' + (isSystem ? ' system-only' : '') + '" data-field-idx="' + idx + '">'
+    + '<div class="field-editor-header">'
+    + '<span class="type-pill locked" title="El tipo se fija tras creación — renombrarlo rompe asignaciones previas">' + sanitizeHTML(type) + '<span class="lock-icon">🔒</span></span>'
+    + '<span class="field-editor-key">' + fieldKey + '</span>'
+    + (isSystem ? '<span class="system-only-badge">Sistema</span>' : '')
+    + '<div class="field-editor-header-actions">'
+    + '<button class="btn-mini" data-move-up="' + idx + '" type="button"' + upDisabled + ' title="Mover arriba">↑</button>'
+    + '<button class="btn-mini" data-move-down="' + idx + '" type="button"' + downDisabled + ' title="Mover abajo">↓</button>'
+    + '<button class="btn-mini btn-mini-danger" data-remove-field="' + idx + '" type="button"' + remAttr + '>✕</button>'
+    + '</div></div>'
+    + '<div class="field-editor-body">' + bodyHtml + '</div></div>';
+}
+
+// Re-renderiza la lista completa de fields + rebindea handlers. Llamado tras
+// add/remove/move para que el DOM refleje el cambio de orden o longitud.
+function refreshEditorFieldsSection(rootEl, mod) {
+  const listEl = rootEl.querySelector('#editorFieldsList');
+  if (!listEl) return;
+  listEl.innerHTML = mod.fields.map((f, i) => renderEditorFieldRowHtml(f, mod, i)).join('');
+  bindEditorFieldRows(rootEl, mod);
+  const summaryEl = rootEl.querySelector('#editorFieldsSummary');
+  if (summaryEl) summaryEl.textContent = mod.fields.length + ' campo' + (mod.fields.length === 1 ? '' : 's') + ' en total';
+}
+
+// Bindea los inputs/buttons de cada .field-editor-row para que editen
+// mod.fields[idx] en vivo. Estrategia: en cada cambio actualizamos la fila
+// del array mutante; el render explícito se hace con refreshEditorFieldsSection.
+function bindEditorFieldRows(rootEl, mod) {
+  rootEl.querySelectorAll('.field-editor-row').forEach(rowEl => {
+    const idx = parseInt(rowEl.dataset.fieldIdx, 10);
+    const field = mod.fields[idx];
+    if (!field) return;
+    rowEl.querySelectorAll('[data-bind]').forEach(input => {
+      const key = input.dataset.bind;
+      // Para checkbox: actualiza al primer 'change' para evitar detonar guard
+      // masivo en cada render. Para text/number: actualiza en 'input' live.
+      const evt = input.type === 'checkbox' ? 'change' : 'input';
+      input.addEventListener(evt, () => {
+        if (input.type === 'checkbox') field[key] = input.checked;
+        else if (input.type === 'number') {
+          const n = parseFloat(input.value);
+          field[key] = Number.isFinite(n) ? n : undefined;
+        } else field[key] = input.value;
+      });
+    });
+    const up = rowEl.querySelector('[data-move-up]');
+    if (up) up.addEventListener('click', () => { if (idx > 0) { const t = mod.fields[idx - 1]; mod.fields[idx - 1] = mod.fields[idx]; mod.fields[idx] = t; refreshEditorFieldsSection(rootEl, mod); } });
+    const down = rowEl.querySelector('[data-move-down]');
+    if (down) down.addEventListener('click', () => { if (idx < mod.fields.length - 1) { const t = mod.fields[idx + 1]; mod.fields[idx + 1] = mod.fields[idx]; mod.fields[idx] = t; refreshEditorFieldsSection(rootEl, mod); } });
+    const rem = rowEl.querySelector('[data-remove-field]');
+    if (rem) rem.addEventListener('click', () => {
+      if (field.source === 'catalog' || field.source === 'hierarchy') return;
+      mod.fields.splice(idx, 1);
+      refreshEditorFieldsSection(rootEl, mod);
+    });
+    // options[] editor (solo select/multi_select SIN source=catalog/hierarchy)
+    if ((field.type === 'select' || field.type === 'multi_select') && !field.source) {
+      rowEl.querySelectorAll('.option-row[data-opt-row]').forEach(optEl => {
+        const oi = parseInt(optEl.dataset.optRow, 10);
+        const keyIn = optEl.querySelector('[data-opt-key]');
+        const labelIn = optEl.querySelector('[data-opt-label]');
+        const updOpt = () => {
+          field.options[oi] = { key: (keyIn.value || '').trim(), label: (labelIn.value || '').trim() };
+        };
+        if (keyIn) keyIn.addEventListener('input', updOpt);
+        if (labelIn) labelIn.addEventListener('input', updOpt);
+        const remOpt = optEl.querySelector('[data-remove-opt]');
+        if (remOpt) remOpt.addEventListener('click', () => { field.options.splice(oi, 1); refreshEditorFieldsSection(rootEl, mod); });
+      });
+      const addOpt = rowEl.querySelector('[data-add-opt]');
+      if (addOpt) addOpt.addEventListener('click', () => {
+        field.options = field.options || [];
+        const nextIdx = field.options.length + 1;
+        field.options.push({ key: 'opt' + nextIdx, label: 'Opción ' + nextIdx });
+        refreshEditorFieldsSection(rootEl, mod);
+      });
+    }
+  });
+}
+
+// Helper: GET /therapists/exercise-schemas?kind&mode&phobia → schema efectivo
+// (server es source-of-truth de la forma canonical del schema). Devuelve null
+// si falla; el editor mostrará un toast y abortará.
+async function fetchEditorSchemaDefaults(kind, mode, phobia) {
+  const params = new URLSearchParams({ kind });
+  if (mode) params.set('mode', mode);
+  if (phobia) params.set('phobia', phobia);
+  try {
+    const r = await api(API + '/therapists/exercise-schemas?' + params.toString());
+    const d = await r.json();
+    if (!d.success) return null;
+    return d.schema;
+  } catch (e) {
+    console.error('[fetchEditorSchemaDefaults]', e);
+    return null;
+  }
+}
+
+// Helper: dada una fila de field del cliente, devuelve el kind+mode+phobia
+// compuesto como value del select (TEMPLATE_KIND_OPTIONS usa esto).
+function editorKindValueFor(kind, mode, phobia) {
+  const normMode = mode || null;
+  const normPhobia = phobia || null;
+  const opt = TEMPLATE_KIND_OPTIONS.find(o => o.kind === kind && (o.mode || null) === normMode && (o.phobia || null) === normPhobia);
+  return opt ? opt.value : 'classic';
+}
+
+async function openClinicalEditor(opts) {
+  // opts = { mode:'create'|'edit', template?, prefill? }
+  // Mode 'create': parte desde los defaults del sistema (o lo que diga prefill).
+  // Mode 'edit': parte desde template.exercise_schema.fields si está, si no desde defaults.
+  const mode = opts.mode || 'create';
+  const t = (mode === 'edit') ? (opts.template || null) : null;
+  const prefill = opts.prefill || {};
+  const isEdit = mode === 'edit' && !!t;
+
+  // Snapshot mutable que se actualizará con los inputs del modal. El servidor
+  // validará al final; mientras tanto conservamos cualquier cambio del
+  // terapeuta. Si la validación falla, le dejamos ver los errores en banner.
+  const initialKind = isEdit ? t.exercise_kind : (prefill.kind || 'thought_record');
+  const initialMode = isEdit ? ((t.exercise_schema && t.exercise_schema.mode) || null) : (prefill.mode || null);
+  const initialPhobia = isEdit ? ((t.exercise_schema && t.exercise_schema.phobia) || null) : (prefill.phobia || null);
+  const mod = {
+    kind: initialKind,
+    mode: initialMode,
+    phobia: initialPhobia,
+    fields: isEdit && t.exercise_schema && Array.isArray(t.exercise_schema.fields) ? JSON.parse(JSON.stringify(t.exercise_schema.fields)) : [],
+    guidance: isEdit && t.exercise_schema ? (t.exercise_schema.guidance || '') : '',
+    basic: {
+      category: isEdit ? t.category : (prefill.category || ''),
+      title: isEdit ? t.title : (prefill.title || ''),
+      instructions: isEdit ? t.instructions : (prefill.instructions || ''),
+      difficulty: isEdit ? t.difficulty : (prefill.difficulty || 'media'),
+      duration_min: isEdit ? t.duration_min : (prefill.duration_min || 30),
+    },
+  };
+
+  // Si editamos y no tenemos fields[] en plantilla (caso raro: kind clínico
+  // sin schema previo), pedimos al server los defaults en lugar de renderizar
+  // una sección vacía.
+  if (mod.fields.length === 0) {
+    const def = await fetchEditorSchemaDefaults(mod.kind, mod.mode, mod.phobia);
+    if (def) {
+      mod.fields = (def.fields || []).map(f => JSON.parse(JSON.stringify(f)));
+      if (!mod.guidance) mod.guidance = def.guidance || '';
+    } else if (mode === 'create') {
+      Swal.fire('Error', 'No pude cargar los campos por defecto del sistema. Revisa tu conexión e inténtalo de nuevo.', 'error');
+      return null;
+    }
+  }
+
+  const kindOptionsHtml = TEMPLATE_KIND_OPTIONS.map(o => '<option value="' + o.value + '">' + sanitizeHTML(o.label) + '</option>').join('');
+  const initialKindValue = editorKindValueFor(mod.kind, mod.mode, mod.phobia);
+
+  const html = '<div id="editorErrorBanner" class="editor-error-banner" style="display:none"></div>'
+    + '<div class="editor-section">'
+    + '<div class="editor-section-title">📋 Básico</div>'
+    + '<label class="soap-label">Categoría</label>'
+    + '<input id="editorBasicCategory" class="swal2-input" value="' + sanitizeHTML(mod.basic.category) + '">'
+    + '<label class="soap-label">Título</label>'
+    + '<input id="editorBasicTitle" class="swal2-input" value="' + sanitizeHTML(mod.basic.title) + '">'
+    + '<label class="soap-label">Instrucciones</label>'
+    + '<textarea id="editorBasicInstructions" class="swal2-textarea" rows="3">' + sanitizeHTML(mod.basic.instructions) + '</textarea>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+    + '<div><label class="soap-label">Dificultad</label>'
+    + '<select id="editorBasicDifficulty" class="swal2-input">'
+    + '<option value="baja"' + (mod.basic.difficulty === 'baja' ? ' selected' : '') + '>🟢 Fácil</option>'
+    + '<option value="media"' + (mod.basic.difficulty === 'media' ? ' selected' : '') + '>🟡 Media</option>'
+    + '<option value="alta"' + (mod.basic.difficulty === 'alta' ? ' selected' : '') + '>🔴 Avanzada</option>'
+    + '</select></div>'
+    + '<div><label class="soap-label">Duración (min)</label>'
+    + '<input id="editorBasicDuration" class="swal2-input" type="number" value="' + mod.basic.duration_min + '" min="5" max="180">'
+    + '</div></div></div>'
+    + '<div class="editor-section">'
+    + '<div class="editor-section-title">🧬 Tipo de ejercicio'
+    + '<span class="editor-section-actions">'
+    + '<button class="btn-mini" id="editorResetDefaultsBtn" type="button" title="Reemplazar los campos actuales por los del sistema para este tipo">↺ Reset a defaults</button>'
+    + '</span></div>'
+    + '<select id="editorKindSelect" class="swal2-input"' + (isEdit ? ' disabled title="No se puede cambiar el kind de una plantilla existente (las asignaciones ya tienen schema congelado)"' : '') + '>'
+    + kindOptionsHtml + '</select>'
+    + '<p class="editor-help-text" id="editorKindHelp">' + sanitizeHTML((TEMPLATE_KIND_OPTIONS.find(o => o.value === initialKindValue) || {}).label || '') + '</p>'
+    + '<label class="soap-label">Guía clínica (opcional, la verá el paciente)</label>'
+    + '<textarea id="editorGuidance" class="swal2-textarea" rows="2" placeholder="Texto terapéutico mostrado antes de empezar">' + sanitizeHTML(mod.guidance) + '</textarea>'
+    + '</div>'
+    + '<div class="editor-section">'
+    + '<div class="editor-section-title">🧩 Campos del formulario'
+    + '<span class="editor-section-actions">'
+    + '<span class="add-field-summary" id="editorFieldsSummary"></span>'
+    + '</span></div>'
+    + '<div id="editorFieldsList"></div>'
+    + '<div class="add-field-row">'
+    + '<select id="editorAddFieldType" aria-label="Tipo de field a añadir"></select>'
+    + '<button class="btn btn-s btn-sm" id="editorAddFieldBtn" type="button">+ Añadir field</button>'
+    + '</div>'
+    + '</div>';
+
+  return new Promise((resolve) => {
+    Swal.fire({
+      title: isEdit ? 'Editar plantilla clínica' : 'Nueva plantilla clínica',
+      html,
+      width: 720,
+      focusConfirm: false,
+      showCancelButton: true,
+      confirmButtonText: isEdit ? 'Guardar cambios' : 'Crear plantilla',
+      cancelButtonText: 'Cancelar',
+      customClass: { htmlContainer: 'editor-container' },
+      didOpen: () => {
+        const rootEl = document.querySelector('.swal2-html-container');
+        const kindSelect = rootEl.querySelector('#editorKindSelect');
+        kindSelect.value = initialKindValue;
+        // Render inicial + bind
+        refreshEditorFieldsSection(rootEl, mod);
+        // Picker de tipo al añadir field
+        const typeSel = rootEl.querySelector('#editorAddFieldType');
+        const FIELD_LABELS = { text:'Texto corto', textarea:'Texto largo', number:'Número', scale:'Escala (slider)', select:'Selección única', multi_select:'Selección múltiple', boolean:'Sí/No', date:'Fecha', repeater:'Lista repetible' };
+        typeSel.innerHTML = Object.keys(FIELD_LABELS).map(t => '<option value="' + t + '">' + sanitizeHTML(FIELD_LABELS[t]) + '</option>').join('');
+        rootEl.querySelector('#editorAddFieldBtn').addEventListener('click', () => {
+          const t = typeSel.value;
+          const defaults = EDITOR_FIELD_TYPE_DEFAULTS[t] || {};
+          // key único basado en timestamp para evitar colisiones con cualquier
+          // field existente (los nuevos keys pueden ser renombrados por el
+          // terapeuta en el server mediante un próximo PUT si quiere).
+          const newKey = 'custom_' + t.replace('_', '') + '_' + Date.now().toString(36).slice(-5);
+          mod.fields.push(Object.assign({ key: newKey, type: t, required: false, sensitive: false }, defaults));
+          refreshEditorFieldsSection(rootEl, mod);
+        });
+        // Capture live edits del textarea de guía clínica en mod.guidance.
+        // preConfirm re-lee el value al enviar, pero tener el state vivo evita
+        // drift si en el futuro algun handler intermedio necesita el state.
+        rootEl.querySelector('#editorGuidance').addEventListener('input', (e) => { mod.guidance = e.target.value; });
+
+        // Cambio de kind solo permitido en create (el select va disabled en edit).
+        if (!isEdit) {
+          kindSelect.addEventListener('change', async () => {
+            const newOpt = TEMPLATE_KIND_OPTIONS.find(o => o.value === kindSelect.value);
+            if (!newOpt) return;
+            const proceed = await Swal.fire({ title:'¿Cambiar tipo de ejercicio?', text:'Esto reemplazará los campos actuales por los del sistema. Tu trabajo no guardado se perderá.', icon:'warning', showCancelButton:true, confirmButtonText:'Sí, cambiar y resetar', cancelButtonText:'Cancelar' });
+            if (!proceed.isConfirmed) { kindSelect.value = editorKindValueFor(mod.kind, mod.mode, mod.phobia); return; }
+            const def = await fetchEditorSchemaDefaults(newOpt.kind, newOpt.mode || null, newOpt.phobia || null);
+            if (!def) { showToast('Error al cargar defaults del nuevo tipo', 'error'); kindSelect.value = editorKindValueFor(mod.kind, mod.mode, mod.phobia); return; }
+            mod.kind = newOpt.kind; mod.mode = newOpt.mode || null; mod.phobia = newOpt.phobia || null;
+            mod.fields = (def.fields || []).map(f => JSON.parse(JSON.stringify(f)));
+            mod.guidance = def.guidance || '';
+            rootEl.querySelector('#editorKindHelp').textContent = newOpt.label;
+            rootEl.querySelector('#editorGuidance').value = mod.guidance;
+            refreshEditorFieldsSection(rootEl, mod);
+          });
+        }
+        // Reset a defaults (sólo campos; preserva kind, mode, phobia actuales).
+        rootEl.querySelector('#editorResetDefaultsBtn').addEventListener('click', async () => {
+          const proceed = await Swal.fire({ title:'¿Resetear campos al esquema del sistema?', text:'Los campos que hayas añadido o modificado se perderán.', icon:'warning', showCancelButton:true, confirmButtonText:'Sí, resetar', cancelButtonText:'Cancelar' });
+          if (!proceed.isConfirmed) return;
+          const def = await fetchEditorSchemaDefaults(mod.kind, mod.mode, mod.phobia);
+          if (!def) { showToast('Error al cargar defaults', 'error'); return; }
+          mod.fields = (def.fields || []).map(f => JSON.parse(JSON.stringify(f)));
+          mod.guidance = def.guidance || '';
+          rootEl.querySelector('#editorGuidance').value = mod.guidance;
+          refreshEditorFieldsSection(rootEl, mod);
+        });
+      },
+      preConfirm: async () => {
+        const rootEl = document.querySelector('.swal2-html-container');
+        // 1. Snapshot de los inputs básicos (en este orden el server validará
+        //    primero los básicos, luego el schema).
+        mod.basic.category = rootEl.querySelector('#editorBasicCategory').value.trim();
+        mod.basic.title = rootEl.querySelector('#editorBasicTitle').value.trim();
+        mod.basic.instructions = rootEl.querySelector('#editorBasicInstructions').value.trim();
+        mod.basic.difficulty = rootEl.querySelector('#editorBasicDifficulty').value;
+        const dur = parseInt(rootEl.querySelector('#editorBasicDuration').value, 10);
+        mod.basic.duration_min = Number.isFinite(dur) && dur >= 5 ? dur : 30;
+        mod.guidance = rootEl.querySelector('#editorGuidance').value || '';
+
+        if (!mod.basic.category || !mod.basic.title || !mod.basic.instructions) {
+          Swal.showValidationMessage('Categoría, título e instrucciones son obligatorios');
+          return false;
+        }
+        if (mod.fields.length === 0) {
+          Swal.showValidationMessage('El esquema clínico debe tener al menos un campo');
+          return false;
+        }
+        const nonRepeater = mod.fields.filter(f => f && f.type !== 'repeater').length;
+        if (nonRepeater === 0) {
+          Swal.showValidationMessage('Al menos un campo debe ser no-repeater (text/number/scale/select/...)');
+          return false;
+        }
+
+        const exerciseSchema = {
+          fields: mod.fields,
+          guidance: mod.guidance,
+          mode: mod.mode || undefined,
+          phobia: mod.phobia || undefined,
+        };
+
+        const body = {
+          category: mod.basic.category,
+          title: mod.basic.title,
+          instructions: mod.basic.instructions,
+          difficulty: mod.basic.difficulty,
+          duration_min: mod.basic.duration_min,
+          exercise_kind: mod.kind,
+          mode: mod.mode || null,
+          phobia: mod.phobia || null,
+          exercise_schema: exerciseSchema,
+        };
+
+        try {
+          let r, d;
+          if (isEdit && t) {
+            r = await api(API + '/therapists/task-templates/' + t.id, { method: 'PUT', body: JSON.stringify(body) });
+          } else {
+            r = await api(API + '/therapists/task-templates', { method: 'POST', body: JSON.stringify(body) });
+          }
+          d = await r.json();
+          if (d.success) {
+            // Limpia el banner de errores al guardar OK.
+            const banner = rootEl.querySelector('#editorErrorBanner');
+            if (banner) banner.style.display = 'none';
+            return d.template;
+          }
+          // 422 errors[] del server: pintamos banner y BLOQUEAMOS confirmación
+          // (return false mantiene el modal abierto).
+          const banner = rootEl.querySelector('#editorErrorBanner');
+          if (banner) {
+            const errs = Array.isArray(d.errors) ? d.errors : [];
+            banner.innerHTML = '<strong>⚠️ ' + sanitizeHTML(d.error || 'Schema inválido') + '</strong>'
+              + (errs.length ? '<ul>' + errs.slice(0, 15).map(e => '<li>' + sanitizeHTML((e.path || '') + ' → ' + (e.code || '') + (e.message ? ' (' + e.message + ')' : '')) + '</li>').join('') + '</ul>'
+                + (errs.length > 15 ? '<p>+ ' + (errs.length - 15) + ' errores más…</p>' : '')
+              : '');
+            banner.style.display = 'block';
+            banner.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+          return false;
+        } catch (e) {
+          Swal.showValidationMessage('Error de conexión con el servidor');
+          return false;
+        }
+      },
+    }).then((sr) => {
+      if (sr.isConfirmed && sr.value) {
+        const saved = sr.value;
+        if (isEdit && t) {
+          const idx = templates.findIndex(x => x.id === t.id);
+          if (idx !== -1) templates[idx] = Object.assign({}, templates[idx], saved);
+        } else {
+          templates.unshift(saved);
+        }
+        renderTemplates();
+        renderCategoryFilters();
+        showToast(isEdit ? '✅ Plantilla clínica actualizada' : '✅ Plantilla clínica creada', 'success');
+        resolve({ saved: true, template: saved });
+      } else {
+        resolve(null);
+      }
+    });
+  });
+}
+
 function editCustomTemplate(templateId){
   const t=templates.find(x=>x.id===templateId);if(!t)return;
+  // Plantillas clínicas (TR/BA/GE): editor rico de 3 secciones (Básico +
+  // Tipo + Campos). Las clásicas conservan el form simple backward-compat.
+  if (t.exercise_kind && t.exercise_kind !== 'classic') {
+    return openClinicalEditor({ mode: 'edit', template: t });
+  }
   Swal.fire({title:'Editar plantilla',html:`
     <label class="soap-label">Categoría</label>
     <input id="swalTmplCat" class="swal2-input" value="${t.category.replace(/"/g,'&quot;')}">

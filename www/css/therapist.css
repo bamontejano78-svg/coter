@@ -1571,6 +1571,349 @@ tbody tr:hover {
   }
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+   Editor clínico de schema — modal 3 secciones (Básico / Tipo / Campos)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Bloque de sección dentro del modal clínico (Básico, Tipo, Campos).
+   Encapsula un grupo de campos relacionados para que la lectura del
+   modal sea escaneable, sin la confusión de un solo scroll gigante. */
+.editor-section {
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  border: 1px solid var(--b);
+  border-radius: var(--r);
+  background: var(--g);
+  text-align: left;
+}
+
+.editor-section:last-child {
+  margin-bottom: 0;
+}
+
+.editor-section-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12.5px;
+  margin: 0 0 10px;
+  color: var(--t);
+  letter-spacing: -0.1px;
+  padding: 6px 10px;
+  background: var(--white);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--b);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editor-section-title .editor-section-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.editor-help-text {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+/* Banner de errores 422 desde el server (validateSchemaDefinition).
+   Aparece arriba del primer .editor-section cuando el PUT falla. */
+.editor-error-banner {
+  background: var(--d-soft);
+  border: 1px solid var(--d-light);
+  border-left: 3px solid var(--d);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--d);
+  text-align: left;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.editor-error-banner ul {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+
+.editor-error-banner li {
+  margin: 2px 0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+}
+
+/* ─── Tarjeta de field en el editor ────────────────────────────────────────
+   Cada field es una fila colapsable visualmente. system-only agrega un
+   borde gris para campos derivados del server (distortion_catalog
+   multi_select y hierarchy select) que el terapeuta NO puede modificar
+   (el server los re-inyecta al validar). */
+.field-editor-row {
+  background: var(--white);
+  border: 1px solid var(--b);
+  border-left: 3px solid var(--p);
+  border-radius: var(--r);
+  padding: 10px 12px;
+  margin: 8px 0;
+  transition: border-color var(--t-fast);
+}
+
+.field-editor-row:hover {
+  border-color: #cbd5e1;
+}
+
+.field-editor-row.system-only {
+  border-left-color: var(--muted);
+  background: var(--g);
+}
+
+/* ─── Cabecera de field ──────────────────────────────────────────────── */
+.field-editor-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--p-soft);
+  color: var(--p);
+  border: 1px solid var(--p-light);
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+
+.type-pill.locked {
+  background: var(--g);
+  color: var(--muted);
+  border-color: var(--b);
+  cursor: not-allowed;
+}
+
+.lock-icon {
+  font-size: 11px;
+  margin-left: 2px;
+}
+
+.field-editor-key {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  user-select: all;
+}
+
+.system-only-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: var(--b);
+  color: var(--muted);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.field-editor-header .field-editor-header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+/* ─── Controles de field ─────────────────────────────────────────────── */
+.btn-mini {
+  padding: 3px 8px;
+  font-size: 10.5px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--b);
+  background: var(--white);
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 600;
+  transition:
+    background var(--t-fast),
+    border-color var(--t-fast),
+    color var(--t-fast);
+}
+
+.btn-mini:hover {
+  border-color: var(--p-light);
+  color: var(--p);
+}
+
+.btn-mini.btn-mini-danger {
+  background: var(--d-soft);
+  color: var(--d);
+  border-color: var(--d-light);
+}
+
+.btn-mini.btn-mini-danger:hover {
+  background: var(--d);
+  color: #fff;
+}
+
+.btn-mini:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ─── Body del field: label, placeholder, required, sensitive, etc ─────────── */
+.field-editor-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+}
+
+.field-editor-body > .full-row {
+  grid-column: 1 / -1;
+}
+
+.field-editor-body label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin: 0 0 3px;
+}
+
+.field-editor-body input[type=text],
+.field-editor-body input[type=number],
+.field-editor-body textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--b);
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  background: var(--white);
+  color: var(--t);
+  font-family: inherit;
+}
+
+.field-editor-body textarea {
+  min-height: 32px;
+  resize: vertical;
+}
+
+.field-editor-body input:focus,
+.field-editor-body textarea:focus {
+  outline: none;
+  border-color: var(--p);
+  box-shadow: 0 0 0 2px var(--p-soft);
+}
+
+.field-editor-body input:disabled,
+.field-editor-body textarea:disabled {
+  background: var(--g);
+  color: var(--soft);
+  cursor: not-allowed;
+}
+
+.field-editor-body .checkbox-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding-top: 14px;
+}
+
+.field-editor-body .checkbox-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--t);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.field-editor-body .checkbox-row input[type=checkbox] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--p);
+  cursor: pointer;
+  margin: 0;
+}
+
+/* ─── Options editor (select / multi_select) ─────────────────────────────────── */
+.options-list-editor {
+  border: 1px solid var(--b);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+  background: var(--g);
+}
+
+.option-row {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0;
+  align-items: center;
+}
+
+.option-row input {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--b);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  background: var(--white);
+  min-width: 0;
+}
+
+.option-row .btn-mini {
+  flex-shrink: 0;
+}
+
+/* ─── Acciones inferiores (add field) ───────────────────────────────────── */
+.add-field-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.add-field-row select {
+  padding: 6px 8px;
+  border: 1px solid var(--b);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  background: var(--white);
+  font-family: inherit;
+  color: var(--t);
+}
+
+.add-field-row select:focus {
+  outline: none;
+  border-color: var(--p);
+}
+
+.add-field-summary {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: right;
+}
+
+@media (max-width: 600px) {
+  .field-editor-body {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ════════ Exercise clinical forms (panel lectura terapeuta) ════════ */
 .exercise-kind-badge { display:inline-block; padding:2px 8px; border:1px solid var(--b); border-radius:4px; font-size:11px; color:var(--muted); }
 .btn-view-responses { padding:4px 10px; font-size:12px; }

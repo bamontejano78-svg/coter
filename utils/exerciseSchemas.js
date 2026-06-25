@@ -147,6 +147,23 @@ const BA_SCHEDULE_SCHEMA = Object.freeze({
     { key: 'completed',   label: '¿Lo hiciste?',              type: 'select',   required: true,  sensitive: false, options: ['Sí, completo', 'Parcialmente', 'No', 'Lo reprogramé'] },
     { key: 'reflection',  label: 'Reflexión',                 type: 'textarea', required: false, sensitive: true,  placeholder: '¿Qué funcionó? ¿Qué ajustarías la próxima semana?' },
   ]),
+  // Plan semanal reutiliza el mismo banco de actividades que el Diario, pero
+  // con el lens “qué secuenciar a lo largo de la semana”. El validador
+  // re-inyecta este array en PUT /task-templates/:id cuando mode=schedule.
+  suggested_activities: Object.freeze([
+    { label: 'Lunes — caminata 30 min por una ruta nueva',                category: 'suave',  difficulty: 'baja',  day_hint: 'lunes' },
+    { label: 'Lunes — cocinar una receta saludable para toda la semana',  category: 'logro',  difficulty: 'media', day_hint: 'lunes' },
+    { label: 'Martes — llamar a un familiar sin agenda concreta',        category: 'social', difficulty: 'baja',  day_hint: 'martes' },
+    { label: 'Miércoles — yoga o estiramientos 20 min',                  category: 'suave',  difficulty: 'baja',  day_hint: 'miercoles' },
+    { label: 'Miércoles — completar un trámite que arrastras',           category: 'logro',  difficulty: 'media', day_hint: 'miercoles' },
+    { label: 'Jueves — quedar con un amigo para café o paseo',           category: 'social', difficulty: 'baja',  day_hint: 'jueves' },
+    { label: 'Jueves — 30 min de lectura sin pantallas',                  category: 'suave',  difficulty: 'baja',  day_hint: 'jueves' },
+    { label: 'Viernes — actividad física moderada (gimnasio, bici)',      category: 'logro',  difficulty: 'media', day_hint: 'viernes' },
+    { label: 'Sábado — actividad social planeada (mercado, museo)',      category: 'social', difficulty: 'media', day_hint: 'sabado' },
+    { label: 'Sábado — proyecto personal (DIY, dibujo, música)',          category: 'logro',  difficulty: 'media', day_hint: 'sabado' },
+    { label: 'Domingo — planificar la semana siguiente 20 min',          category: 'logro',  difficulty: 'baja',  day_hint: 'domingo' },
+    { label: 'Domingo — autocuidado (baño largo, skincare, journaling)',  category: 'suave',  difficulty: 'baja',  day_hint: 'domingo' },
+  ]),
   guidance: 'Jacobson (1996). Programa el domingo por la noche de la semana siguiente. Si tienes una agenda muy ocupada, prioriza al menos 1 actividad con P y 1 con L por día. La constancia pesa más que la intensidad.',
 });
 
@@ -252,14 +269,163 @@ const SCHEMAS_BY_KIND = Object.freeze({
   graded_exposure:       GE_AGORAPHOBIA_SCHEMA,  // default antes de resolver phobia
 });
 
-// ─── getSchema: resuelve schema efectivo ──────────────────────────────────
-// Prioridad:
-//   1. dbSchema (de task_templates.exercise_schema) si tiene `fields` válido.
-//      Esto cubre el caso "el terapeuta editó la plantilla" — la BD es
-//      la fuente de verdad clínica.
-//   2. SCHEMAS_BY_KIND [...] indexado por (kind, mode?, phobia?).
-//   3. null si kind === 'classic' o kind inválido (lo que sea que devolviera
-//      la BD no es utilizable).
+// ─── Whitelist de tipos de campo aceptados en schemas personalizados ─────
+// El editor clínico (PUT /task-templates/:id en routes/therapist.js)
+// permite al terapeuta añadir/quitar fields. Cada field.type debe pertenecer
+// a este set; cualquier tipo fuera se rechaza con 400 antes de INSERT.
+const FIELD_TYPES = Object.freeze(['text', 'textarea', 'number', 'scale', 'select', 'multi_select', 'boolean', 'date', 'repeater']);
+
+// ─── validateSchemaDefinition ────────────────────────────────────────────
+// Valida un schema personalizado enviado por el terapeuta. Diferencia
+// clave con validateResponses() (que valida respuestas del paciente):
+// este valida la DEFINICIÓN del form. Mismo idioma de errores (path,
+// code, message) para que el frontend pueda renderizarlos con la misma
+// infraestructura de banners.
+//
+// Qué hace:
+//   1. Rechaza classic (no tiene schema).
+//   2. fields[]: array no vacío, ≥ 1 campo, al menos uno no-repeater
+//      (rechaza schemas isomorfos a respuestas vacías {}-complejos-sólo).
+//   3. Cada field: key snake_case único, type en FIELD_TYPES, label string,
+//      required/sensitive boolean, min/max coherentes para number/scale,
+//      options[] para select/multi_select (sólo sin source), sub-fields
+//      validados para repeater.
+//   4. RE-INYECTA los root structures del sistema (distortion_catalog para
+//      TR, suggested_activities+mode para BA, hierarchy+phobia para GE) desde
+//      el schema estático. Esto evita que el terapeuta borre metadatos de
+//      los que depende el frontend y utils/exerciseEncryption.js.
+//   5. Devuelve { valid, errors, schema }. Si !valid, schema=null.
+//
+function validateSchemaDefinition(definition, kind) {
+  const errors = [];
+  if (!kind || kind === 'classic') {
+    return { valid: false, errors: [{ path: '', code: 'no_classic_schema', message: 'kind=classic no acepta schema (instrucciones en texto plano)' }], schema: null };
+  }
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+    return { valid: false, errors: [{ path: '', code: 'not_object', message: 'definition debe ser un objeto plano' }], schema: null };
+  }
+
+  const rawFields = definition.fields;
+  if (!Array.isArray(rawFields) || rawFields.length === 0) {
+    return { valid: false, errors: [{ path: 'fields', code: 'empty_fields', message: 'fields[] debe contener al menos 1 entrada' }], schema: null };
+  }
+
+  // Al menos un field no-repeater para no terminar con un schema isomorfo
+  // a respuestas vacías (el paciente completaría un repeater pero sin
+  // contexto de input).
+  const hasNonRepeater = rawFields.some(f => f && f.type !== 'repeater');
+  if (!hasNonRepeater) {
+    errors.push({ path: 'fields', code: 'no_top_level_response_field', message: 'al menos 1 field debe ser text/textarea/number/scale/select/multi_select/boolean/date (no solo repeaters)' });
+  }
+
+  const seenKeys = new Set();
+  const sanitizedFields = rawFields.map((f, i) => {
+    if (!f || typeof f !== 'object' || Array.isArray(f)) {
+      errors.push({ path: 'fields[' + i + ']', code: 'not_object', message: 'field debe ser un objeto' });
+      return null;
+    }
+    // key: snake_case único
+    const key = f.key;
+    if (typeof key !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(key)) {
+      errors.push({ path: 'fields[' + i + '].key', code: 'invalid_key', message: 'key debe ser snake_case (a-z 0-9 _) y comenzar con letra o _' });
+    } else if (seenKeys.has(key)) {
+      errors.push({ path: 'fields[' + i + '].key', code: 'duplicate_key', message: 'key duplicado: ' + key });
+    } else {
+      seenKeys.add(key);
+    }
+    // type
+    if (!FIELD_TYPES.includes(f.type)) {
+      errors.push({ path: 'fields[' + i + '].type', code: 'invalid_type', message: 'type debe estar en: ' + FIELD_TYPES.join(', ') });
+    }
+    // label
+    if (typeof f.label !== 'string' || f.label.trim().length === 0) {
+      errors.push({ path: 'fields[' + i + '].label', code: 'required_missing', message: 'label es obligatorio' });
+    }
+    // required / sensitive boolean
+    if (f.required !== undefined && typeof f.required !== 'boolean') {
+      errors.push({ path: 'fields[' + i + '].required', code: 'not_a_boolean', message: 'required debe ser booleano' });
+    }
+    if (f.sensitive !== undefined && typeof f.sensitive !== 'boolean') {
+      errors.push({ path: 'fields[' + i + '].sensitive', code: 'not_a_boolean', message: 'sensitive debe ser booleano' });
+    }
+    // number/scale: min/max
+    if (f.type === 'number' || f.type === 'scale') {
+      if (f.min !== undefined && typeof f.min !== 'number') errors.push({ path: 'fields[' + i + '].min', code: 'not_a_number', message: 'min debe ser número' });
+      if (f.max !== undefined && typeof f.max !== 'number') errors.push({ path: 'fields[' + i + '].max', code: 'not_a_number', message: 'max debe ser número' });
+      if (typeof f.min === 'number' && typeof f.max === 'number' && f.min >= f.max) {
+        errors.push({ path: 'fields[' + i + ']', code: 'min_ge_max', message: 'min debe ser estrictamente menor que max' });
+      }
+    }
+    // select/multi_select sin source: options[]
+    if ((f.type === 'select' || f.type === 'multi_select') && !f.source) {
+      if (!Array.isArray(f.options) || f.options.length === 0) {
+        errors.push({ path: 'fields[' + i + '].options', code: 'empty_options', message: 'select/multi_select sin source requiere options[] no vacío' });
+      } else {
+        const seenOptKeys = new Set();
+        f.options.forEach((opt, oi) => {
+          let ok = null;
+          if (typeof opt === 'string') ok = opt;
+          else if (opt && typeof opt === 'object' && typeof opt.key === 'string') ok = opt.key;
+          if (!ok) {
+            errors.push({ path: 'fields[' + i + '].options[' + oi + ']', code: 'invalid_option', message: 'opción debe ser string o { key: string, label: string }' });
+            return;
+          }
+          if (seenOptKeys.has(ok)) errors.push({ path: 'fields[' + i + '].options[' + oi + ']', code: 'duplicate_option', message: 'key de opción duplicado: ' + ok });
+          seenOptKeys.add(ok);
+        });
+      }
+    }
+    // repeater: sub-fields (cliente NO edita sub-fields en v1; defensa por
+    // si llegan). Recursión con reglas equivalentes pero simplificadas.
+    if (f.type === 'repeater') {
+      if (!Array.isArray(f.fields) || f.fields.length === 0) {
+        errors.push({ path: 'fields[' + i + '].fields', code: 'empty_repeater', message: 'repeater.fields[] no puede estar vacío' });
+      } else {
+        const seenSubKeys = new Set();
+        f.fields.forEach((sf, si) => {
+          if (!sf || typeof sf.key !== 'string' || !FIELD_TYPES.includes(sf.type)) {
+            errors.push({ path: 'fields[' + i + '].fields[' + si + ']', code: 'invalid_subfield', message: 'sub-field debe tener key:string + type ∈ FIELD_TYPES' });
+          } else if (seenSubKeys.has(sf.key)) {
+            errors.push({ path: 'fields[' + i + '].fields[' + si + ']', code: 'duplicate_subkey', message: 'sub-key duplicado: ' + sf.key });
+          } else {
+            seenSubKeys.add(sf.key);
+          }
+        });
+      }
+    }
+    return f;
+  });
+
+  // ── Re-inject de root structures del sistema ──────────────────────────
+  // Mantiene schema_version estable y restaura distortion_catalog para TR,
+  // hierarchy para GE, suggested_activities para BA. Si el cliente envió
+  // estos campos, los descartamos silenciosamente: el servidor no acepta
+  // que el terapeuta los manipule porque el frontend y exerciseEncryption
+  // dependen de la forma canónica.
+  let merged = { schema_version: SCHEMA_VERSION };
+  let effMode = null;
+  let effPhobia = null;
+  if (kind === 'thought_record') {
+    merged.distortion_catalog = THOUGHT_RECORD_SCHEMA.distortion_catalog;
+  } else if (kind === 'behavioral_activation') {
+    effMode = (definition.mode && ['diary', 'schedule'].includes(definition.mode)) ? definition.mode : 'diary';
+    const base = BEHAVIORAL_ACTIVATION_SCHEMAS[effMode] || BA_DIARY_SCHEMA;
+    merged.mode = effMode;
+    merged.suggested_activities = base.suggested_activities;
+  } else if (kind === 'graded_exposure') {
+    effPhobia = (definition.phobia && ['agoraphobia', 'social_anxiety', 'claustrophobia'].includes(definition.phobia)) ? definition.phobia : 'agoraphobia';
+    const base = GRADED_EXPOSURE_SCHEMAS[effPhobia] || GE_AGORAPHOBIA_SCHEMA;
+    merged.phobia = effPhobia;
+    merged.hierarchy = base.hierarchy;
+  } else {
+    errors.push({ path: '', code: 'unknown_kind', message: 'kind no soportado: ' + kind });
+  }
+
+  merged.fields = sanitizedFields.filter(Boolean);
+  if (typeof definition.guidance === 'string') merged.guidance = definition.guidance;
+  return { valid: errors.length === 0, errors, schema: merged };
+}
+
 function deepFreeze(value) {
   // Recursive freeze que no rompe sobre JSONB-like: recursa a través de
   // objetos y arrays planos, y se detiene en funciones / valores primitivos.
@@ -516,6 +682,7 @@ function pushRepeaterPath(out, repeaterKey, sub, fullStrip) {
 // ─── Exports ─────────────────────────────────────────────────────────────
 module.exports = {
   KINDS,
+  FIELD_TYPES,
   SCHEMAS_BY_KIND,
   BEHAVIORAL_ACTIVATION_SCHEMAS,
   GRADED_EXPOSURE_SCHEMAS,
@@ -527,6 +694,7 @@ module.exports = {
   GE_CLAUSTROPHOBIA_SCHEMA,
   getSchema,
   validateResponses,
+  validateSchemaDefinition,
   getSensitiveFieldPaths,
   deepFreeze,
   SCHEMA_VERSION,
