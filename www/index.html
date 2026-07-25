@@ -1,77 +1,396 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Coter — Plataforma de acompañamiento terapéutico. Accede como paciente o terapeuta.">
-<title>Coter — Bienvenido</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/css/landing.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Coter Pro ayuda a terapeutas a acompañar a sus pacientes entre sesiones con check-ins, tareas terapéuticas, escalas clínicas, notas y comunicación segura.">
+  <title>Coter Pro — Continuidad terapéutica entre sesiones</title>
+  <meta property="og:title" content="Coter Pro — Continuidad terapéutica entre sesiones">
+  <meta property="og:description" content="Coter Pro centraliza check-ins, tareas, escalas clínicas, mensajes y notas para que cada sesión empiece con contexto claro.">
+  <meta property="og:image" content="https://coter.app/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:url" content="https://coter.app/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Coter Pro">
+  <meta property="og:locale" content="es_ES">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Coter Pro — Continuidad terapéutica entre sesiones">
+  <meta name="twitter:description" content="Check-ins, tareas terapéuticas, escalas clínicas y comunicación segura entre terapeuta y paciente.">
+  <meta name="twitter:image" content="https://coter.app/og-image.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://images.unsplash.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/css/landing.css">
 </head>
 <body>
+  <div class="page-glow glow-one" aria-hidden="true"></div>
+  <div class="page-glow glow-two" aria-hidden="true"></div>
+  <div class="page-grid" aria-hidden="true"></div>
 
-<div class="landing-shell">
-  <div class="landing-bg"></div>
-
-  <main class="landing-card" aria-labelledby="landing-title">
-
-    <header class="brand">
-      <div class="brand-mark" aria-hidden="true">
-        <svg width="22" height="22" viewBox="0 0 24 24" focusable="false">
-          <path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Coter Pro">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
+          <path d="M20 7.5A9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
         </svg>
-      </div>
-      <h1 id="landing-title" class="brand-name">Coter</h1>
-      <p class="brand-tagline">Tu compañero terapéutico digital</p>
-    </header>
+      </span>
+      <span class="brand-copy">
+        <strong>Coter Pro</strong>
+        <small>Seguimiento terapéutico</small>
+      </span>
+    </a>
 
-    <h2 class="prompt">¿Cómo quieres continuar?</h2>
-    <p class="prompt-sub">Selecciona tu rol para entrar al panel correspondiente.</p>
+    <nav class="nav-links" aria-label="Navegación principal">
+      <a href="#producto">Producto</a>
+      <a href="#flujo">Flujo</a>
+      <a href="#privacidad">Privacidad</a>
+      <a href="#precio">Precio</a>
+    </nav>
 
-    <div class="role-grid">
-
-      <a href="/paciente.html" class="role-card role-patient" data-role="patient">
-        <div class="role-art" aria-hidden="true">
-          <span class="role-emoji">P</span>
-          <span class="role-sparkle s1"></span>
-          <span class="role-sparkle s2"></span>
-          <span class="role-sparkle s3"></span>
-        </div>
-        <div class="role-body">
-          <div class="role-kicker">Para pacientes</div>
-          <div class="role-title">Soy paciente</div>
-          <p class="role-desc">Conecta con tu terapeuta usando el código <strong>TH-XXXXXX</strong> que te haya facilitado y registra cómo te sientes cada día.</p>
-          <span class="role-cta">Entrar como paciente <span class="role-arrow">→</span></span>
-        </div>
-      </a>
-
-      <a href="/terapeuta.html" class="role-card role-therapist" data-role="therapist">
-        <div class="role-art" aria-hidden="true">
-          <span class="role-emoji">T</span>
-          <span class="role-sparkle s1"></span>
-          <span class="role-sparkle s2"></span>
-          <span class="role-sparkle s3"></span>
-        </div>
-        <div class="role-body">
-          <div class="role-kicker">Para profesionales</div>
-          <div class="role-title">Soy terapeuta</div>
-          <p class="role-desc">Accede al panel clínico para gestionar pacientes, asignar tareas TCC, revisar el progreso y comunicarte con tu equipo terapéutico.</p>
-          <span class="role-cta">Iniciar sesión <span class="role-arrow">→</span></span>
-        </div>
-      </a>
-
+    <div class="header-actions">
+      <a class="login-link" href="/terapeuta.html">Iniciar sesión</a>
+      <a class="button button-dark button-small" href="/pioneros.html">Acceso pionero</a>
     </div>
+  </header>
 
-    <footer class="landing-foot">
-      <span class="foot-dot"></span>
-      <span>Coter Pro · Plataforma de acompañamiento terapéutico</span>
-    </footer>
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow">
+          <span class="eyebrow-dot"></span>
+          Para consulta privada y pequeños centros
+        </div>
 
+        <h1>Que el trabajo terapéutico no se pierda entre sesiones.</h1>
+
+        <p class="hero-lead">
+          Coter Pro centraliza check-ins, tareas, escalas clínicas, mensajes y notas para que cada sesión empiece con contexto claro y el paciente tenga una guía sencilla entre consultas.
+        </p>
+
+        <div class="hero-actions">
+          <a class="button button-primary" href="/pioneros.html">Solicitar acceso pionero</a>
+          <a class="button button-secondary" href="/terapeuta.html">Ver área profesional</a>
+        </div>
+
+        <div class="hero-proof" aria-label="Puntos de confianza">
+          <div>
+            <strong>14 días</strong>
+            <span>trial inicial</span>
+          </div>
+          <div>
+            <strong>3 €</strong>
+            <span>por paciente activo</span>
+          </div>
+          <div>
+            <strong>0 anuncios</strong>
+            <span>entorno clínico limpio</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="product-stage" aria-label="Vista previa del producto Coter Pro">
+        <div class="stage-orbit orbit-a" aria-hidden="true"></div>
+        <div class="stage-orbit orbit-b" aria-hidden="true"></div>
+
+        <figure class="hero-photo">
+          <img src="https://images.unsplash.com/photo-1758273240631-59d44c8f5b66?auto=format&amp;fit=crop&amp;w=1500&amp;q=85" alt="Paciente y terapeuta conversando en una consulta" fetchpriority="high">
+          <figcaption>Una práctica más presente, incluso entre consultas.</figcaption>
+        </figure>
+
+        <div class="browser-mock">
+          <div class="mock-chrome">
+            <span></span><span></span><span></span>
+            <em>coter.pro / paciente</em>
+          </div>
+
+          <div class="dashboard-shell">
+            <aside class="mock-sidebar">
+              <div class="side-logo"></div>
+              <span class="side-line active"></span>
+              <span class="side-line"></span>
+              <span class="side-line short"></span>
+              <span class="side-line"></span>
+            </aside>
+
+            <div class="mock-main">
+              <div class="mock-top">
+                <div>
+                  <span class="panel-label">Resumen antes de sesión</span>
+                  <strong>Laura M.</strong>
+                </div>
+                <span class="status-pill">Seguimiento activo</span>
+              </div>
+
+              <div class="insight-row">
+                <article class="insight-card mood">
+                  <span>Ánimo</span>
+                  <strong>7.2</strong>
+                  <small>+0.8 vs semana anterior</small>
+                </article>
+                <article class="insight-card anxiety">
+                  <span>Ansiedad</span>
+                  <strong>4.1</strong>
+                  <small>tendencia estable</small>
+                </article>
+                <article class="insight-card adherence">
+                  <span>Tareas</span>
+                  <strong>82%</strong>
+                  <small>adherencia mensual</small>
+                </article>
+              </div>
+
+              <div class="chart-card">
+                <div class="chart-head">
+                  <strong>Evolución semanal</strong>
+                  <span>Últimos 7 días</span>
+                </div>
+                <div class="soft-chart" aria-hidden="true">
+                  <i style="height:38%"></i>
+                  <i style="height:50%"></i>
+                  <i style="height:44%"></i>
+                  <i style="height:64%"></i>
+                  <i style="height:58%"></i>
+                  <i style="height:72%"></i>
+                  <i style="height:78%"></i>
+                </div>
+              </div>
+
+              <div class="task-strip">
+                <span class="task-icon">✓</span>
+                <div>
+                  <strong>Thought Record completado</strong>
+                  <small>Respuestas estructuradas listas para revisar.</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="phone-mock" aria-label="Vista paciente">
+          <div class="phone-speaker"></div>
+          <span class="phone-kicker">Hoy</span>
+          <strong>¿Cómo te sientes?</strong>
+          <div class="mood-scale">
+            <span></span><span></span><span class="selected"></span><span></span><span></span>
+          </div>
+          <div class="phone-card">
+            <small>Tarea pendiente</small>
+            <b>Registro de pensamientos</b>
+          </div>
+          <a href="/paciente.html">Acceso paciente</a>
+        </div>
+
+        <div class="floating-note note-a">
+          <span>Próxima sesión</span>
+          <strong>3 temas recurrentes detectados por seguimiento</strong>
+        </div>
+        <div class="floating-note note-b">
+          <span>Privacidad</span>
+          <strong>Datos sensibles cifrados</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="human-section" aria-labelledby="human-title">
+      <div class="human-section-inner">
+        <div class="human-visual">
+          <div class="human-photo-frame">
+            <img src="https://images.unsplash.com/photo-1772588627365-985e3ff9cb9e?auto=format&amp;fit=crop&amp;w=1200&amp;q=85" alt="Persona escribiendo sus reflexiones en un cuaderno" loading="lazy">
+          </div>
+          <div class="human-note">
+            <span>Entre sesiones</span>
+            <strong>Un espacio breve para registrar, no para hacerlo todo perfecto.</strong>
+          </div>
+          <div class="human-sun" aria-hidden="true"></div>
+        </div>
+
+        <div class="human-copy">
+          <span class="section-kicker">La parte humana primero</span>
+          <h2 id="human-title">El seguimiento acompaña. No reemplaza la conversación.</h2>
+          <p>
+            Coter Pro da una estructura ligera al tiempo entre consultas: una tarea clara, un check-in breve y una manera serena de llegar a la próxima sesión con más contexto.
+          </p>
+
+          <div class="human-points">
+            <div>
+              <span class="human-point-number">01</span>
+              <p><strong>Paciente</strong> registra lo importante cuando ocurre.</p>
+            </div>
+            <div>
+              <span class="human-point-number">02</span>
+              <p><strong>Terapeuta</strong> retoma la sesión desde la historia reciente.</p>
+            </div>
+          </div>
+
+          <a class="text-link" href="#flujo">Ver cómo funciona <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section problem-section">
+      <div class="section-heading centered">
+        <span class="section-kicker">El cambio práctico</span>
+        <h2>De información dispersa a continuidad clínica.</h2>
+      </div>
+
+      <div class="before-after">
+        <article class="contrast-card before">
+          <span class="contrast-label">Antes</span>
+          <h3>Mensajes, notas y tareas repartidas.</h3>
+          <ul>
+            <li>Registros en papel, WhatsApp o memoria.</li>
+            <li>Dificultad para saber qué pasó entre sesiones.</li>
+            <li>Tareas sin seguimiento claro.</li>
+          </ul>
+        </article>
+        <article class="contrast-card after">
+          <span class="contrast-label">Con Coter</span>
+          <h3>Una vista ordenada antes de cada consulta.</h3>
+          <ul>
+            <li>Check-ins emocionales y actividad reciente.</li>
+            <li>Tareas, escalas y notas en el mismo lugar.</li>
+            <li>Paciente acompañado sin invadir su día a día.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section product-section" id="producto">
+      <div class="split">
+        <div class="sticky-copy">
+          <span class="section-kicker">Producto</span>
+          <h2>Una capa de seguimiento entre consulta y consulta.</h2>
+          <p>
+            Coter Pro está pensado para mejorar la preparación clínica, sostener la adherencia y separar la comunicación terapéutica de los canales personales.
+          </p>
+        </div>
+
+        <div class="feature-stack">
+          <article class="feature-card">
+            <span class="feature-icon">01</span>
+            <div>
+              <h3>Check-ins emocionales</h3>
+              <p>Ánimo, ansiedad, energía y pensamientos recientes para entender mejor el intervalo entre sesiones.</p>
+            </div>
+          </article>
+          <article class="feature-card">
+            <span class="feature-icon">02</span>
+            <div>
+              <h3>Tareas terapéuticas estructuradas</h3>
+              <p>Ejercicios TCC, registros de pensamiento, activación conductual, exposición gradual y tareas personalizadas.</p>
+            </div>
+          </article>
+          <article class="feature-card">
+            <span class="feature-icon">03</span>
+            <div>
+              <h3>Escalas clínicas y progreso</h3>
+              <p>Seguimiento con cuestionarios como PHQ-9, GAD-7 y BDI-II, siempre como apoyo al criterio profesional.</p>
+            </div>
+          </article>
+          <article class="feature-card">
+            <span class="feature-icon">04</span>
+            <div>
+              <h3>Mensajería y notas en contexto</h3>
+              <p>Comunicación segura, notas clínicas, objetivos activos e historial accesible desde el panel del terapeuta.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section flow-section" id="flujo">
+      <div class="section-heading">
+        <span class="section-kicker">Flujo sencillo</span>
+        <h2>Menos configuración. Más uso real.</h2>
+        <p>La adopción importa: si el paciente no lo usa, la herramienta no existe. Por eso el flujo está pensado para ser directo.</p>
+      </div>
+
+      <div class="flow-grid">
+        <article class="flow-card">
+          <span>1</span>
+          <h3>Genera un código</h3>
+          <p>El terapeuta crea el acceso y el paciente entra con un código seguro.</p>
+        </article>
+        <article class="flow-card raised">
+          <span>2</span>
+          <h3>Paciente registra y completa</h3>
+          <p>Check-ins, tareas y cuestionarios desde una interfaz simple.</p>
+        </article>
+        <article class="flow-card">
+          <span>3</span>
+          <h3>Terapeuta revisa contexto</h3>
+          <p>Antes de la sesión, todo lo importante está reunido en el panel.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section privacy-section" id="privacidad">
+      <div class="privacy-panel">
+        <div>
+          <span class="section-kicker">Privacidad clínica</span>
+          <h2>Diseñado para datos sensibles desde el primer día.</h2>
+          <p>
+            La confianza no puede depender de parches. Coter Pro prioriza sesiones seguras, cifrado, separación de accesos y auditoría de actividad.
+          </p>
+        </div>
+
+        <div class="security-grid">
+          <div><strong>Cifrado</strong><span>Datos sensibles protegidos en base de datos.</span></div>
+          <div><strong>Sesiones seguras</strong><span>Cookies HttpOnly y expiración de tokens.</span></div>
+          <div><strong>Acceso separado</strong><span>Panel profesional y experiencia paciente diferenciados.</span></div>
+          <div><strong>Historial clínico</strong><span>La información se conserva aunque se desactive una conexión.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section pricing-section" id="precio">
+      <div class="pricing-shell">
+        <div class="pricing-copy">
+          <span class="section-kicker">Programa pionero</span>
+          <h2>Condiciones simples para validar con terapeutas reales.</h2>
+          <p>
+            Acceso temprano para profesionales que quieran probar Coter Pro con pacientes reales y ayudar a definir el producto.
+          </p>
+        </div>
+
+        <div class="price-card">
+          <span class="price-badge">Primeros terapeutas</span>
+          <div class="price">
+            <strong>3 €</strong>
+            <span>/ paciente activo / mes</span>
+          </div>
+          <ul>
+            <li>Trial inicial de 14 días.</li>
+            <li>Panel terapeuta + app paciente.</li>
+            <li>Tareas, check-ins, escalas y notas.</li>
+            <li>Sin permanencia.</li>
+          </ul>
+          <a class="button button-primary" href="/pioneros.html">Solicitar acceso pionero</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section final-cta">
+      <div class="final-card">
+        <span class="section-kicker">Coter Pro</span>
+        <h2>Convierte el espacio entre sesiones en parte activa del tratamiento.</h2>
+        <p>Más continuidad, más contexto y una experiencia sencilla para paciente y terapeuta.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="/pioneros.html">Quiero participar</a>
+          <a class="button button-secondary" href="/paciente.html">Acceso para pacientes</a>
+        </div>
+      </div>
+    </section>
   </main>
-</div>
 
+  <footer class="site-footer">
+    <span>© Coter Pro</span>
+    <span>Plataforma de acompañamiento terapéutico</span>
+    <a href="/terapeuta.html">Área profesional</a>
+    <span class="photo-credit">Fotografías: <a href="https://unsplash.com/photos/a-woman-talks-to-a-therapist-in-an-office-K_MSe-zglGI" target="_blank" rel="noopener noreferrer">Vitaly Gariev</a> y <a href="https://unsplash.com/photos/a-woman-sitting-in-a-chair-writing-in-a-notebook-KdKdjPSqL7E" target="_blank" rel="noopener noreferrer">Kelly Sikkema</a> / Unsplash</span>
+  </footer>
 </body>
 </html>

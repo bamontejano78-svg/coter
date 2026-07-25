@@ -10,6 +10,9 @@ const logger = require('./config/logger');
 const therapistRoutes = require('./routes/therapist');
 const patientRoutes = require('./routes/patients');
 const eventsRoutes = require('./routes/events');
+const billingRoutes = require('./routes/billing');
+const pioneersRoutes = require('./routes/pioneers');
+const adminRoutes = require('./routes/admin');
 const taskScheduler = require('./utils/taskScheduler');
 
 const app = express();
@@ -22,7 +25,7 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:", "blob:"],
+      imgSrc: ["'self'", "data:", "blob:", "https://images.unsplash.com"],
       connectSrc: ["'self'"],
     },
   },
@@ -32,6 +35,12 @@ app.use(cors({
   origin: config.CORS_ORIGINS.length > 0 ? config.CORS_ORIGINS : '*',
   credentials: true,
 }));
+
+// ── Stripe webhook: necesita raw body para verificar firma ──────
+// Se monta ANTES de express.json() para que el body llegue sin parsear.
+// Solo afecta a la ruta /api/v1/billing/webhook.
+app.use('/api/v1/billing/webhook', express.raw({ type: '*/*' }));
+app.use('/api/billing/webhook', express.raw({ type: '*/*' }));
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -91,6 +100,9 @@ app.use('/api/v1/therapists/register', registerLimiter);
 app.use('/api/v1/patients', apiLimiter);
 app.use('/api/v1/therapists', therapistRoutes);
 app.use('/api/v1/patients', patientRoutes);
+app.use('/api/v1/billing', billingRoutes);
+app.use('/api/v1/pioneers', apiLimiter, pioneersRoutes);
+app.use('/api/v1/admin', apiLimiter, adminRoutes);
 
 // ─── SSE event stream ───────────────────────────────────────────────
 // Sin rate limit en GET /events (la conexión es long-lived y legítima).
@@ -112,6 +124,7 @@ app.use('/api/therapists', (req, res, next) => {
 app.use('/api/therapists/register', registerLimiter);
 app.use('/api/therapists', therapistRoutes);
 app.use('/api/patients', apiLimiter, patientRoutes);
+app.use('/api/billing', billingRoutes);
 
 // Health check mejorado con estadísticas del pool
 app.get('/api/health', async (req, res) => {
@@ -164,6 +177,7 @@ app.use((err, req, res, _next) => {
 });
 
 // ─── Arranque ─────────────────────────────────────────────────
+if (require.main === module) {
 initializeDatabase()
   .then(() => {
     const server = app.listen(config.PORT, config.HOST, () => {
@@ -205,5 +219,6 @@ initializeDatabase()
     logger.error('Error fatal al iniciar', { error: err.message, stack: err.stack });
     process.exit(1);
   });
+}
 
 module.exports = app;

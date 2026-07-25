@@ -24,15 +24,25 @@ const logger = require('../config/logger');
 const config = require('../config/env');
 const { getPool } = require('../database');
 const { runAllPendingReminders } = require('./notifications');
+const { reportMonthlyUsage } = require('./stripe');
+const { evaluateAllAlerts } = require('./clinicalAlerts');
 
 // Expansion literal de "star-slash-10" para evitar cerrar el JSDoc.
 const DEFAULT_CRON_EXPR = '0,10,20,30,40,50 * * * *';
+// Día 1 de cada mes a las 02:00 UTC (horario de baja carga)
+const DEFAULT_BILLING_CRON_EXPR = '0 2 1 * *';
+// Cada 10 minutos: evaluación de alertas clínicas inteligentes
+const DEFAULT_ALERTS_CRON_EXPR = '0,10,20,30,40,50 * * * *';
 
 let scheduledTask = null;
+let scheduledBillingTask = null;
+let scheduledAlertsTask = null;
 // Mutex simple: si una tick anterior sigue corriendo (BD lenta), no
 // arrancamos otra en paralelo. node-cron por defecto NO previene overlaps
 // y podria saturar el pool de conexiones.
 let runningTick = null;
+let runningBillingTick = null;
+let runningAlertsTick = null;
 // Referencia al setTimeout de la primera tick al startup, para poder
 // cancelarlo en stop() y evitar fugas tras shutdown.
 let startupTimer = null;
@@ -85,6 +95,22 @@ function start() {
   });
   logger.info('TaskScheduler iniciado', { cronExpr });
 
+  // ── Cron de facturación mensual ──
+  const billingCronExpr = config.CRON_BILLING || DEFAULT_BILLING_CRON_EXPR;
+  scheduledBillingTask = cron.schedule(billingCronExpr, () => runBillingTick('cron'), {
+    scheduled: true,
+    timezone: process.env.TZ || 'UTC',
+  });
+  logger.info('TaskScheduler billing iniciado', { billingCronExpr });
+
+  // ── Cron de alertas clínicas ──
+  const alertsCronExpr = config.CRON_ALERTS || DEFAULT_ALERTS_CRON_EXPR;
+  scheduledAlertsTask = cron.schedule(alertsCronExpr, () => runAlertsTick('cron'), {
+    scheduled: true,
+    timezone: process.env.TZ || 'UTC',
+  });
+  logger.info('TaskScheduler alerts iniciado', { alertsCronExpr });
+
   // Primera tick al startup con un pequeno delay para que reminders no
   // esten "frios" hasta el primer cron tick (mejora UX justo despues del
   // deploy). Opt-out via env CRON_REMINDERS_RUN_AT_START=false.
@@ -97,14 +123,46 @@ function start() {
   }
 }
 
+async function runBillingTick(reason) {
+  if (runningBillingTick) {
+    logger.info('Billing tick ya en curso — saltando', { reason });
+    return null;
+  }
+  runningBillingTick = (async () => {
+    try {
+      const pool = getPool();
+      const result = await reportMonthlyUsage(pool);
+      if (result.reported > 0 || result.errors > 0) {
+        logger.info('Billing tick', { reason, ...result });
+      }
+      return result;
+    } catch (err) {
+      logger.error('Billing tick falló', { error: err.message, reason });
+      return null;
+    } finally {
+      runningBillingTick = null;
+    }
+  })();
+  return runningBillingTick;
+}
+
 function stop() {
   if (startupTimer) {
     clearTimeout(startupTimer);
     startupTimer = null;
   }
-  if (!scheduledTask) return;
-  scheduledTask.stop();
-  scheduledTask = null;
+  if (scheduledTask) {
+    scheduledTask.stop();
+    scheduledTask = null;
+  }
+  if (scheduledBillingTask) {
+    scheduledBillingTask.stop();
+    scheduledBillingTask = null;
+  }
+  if (scheduledAlertsTask) {
+    scheduledAlertsTask.stop();
+    scheduledAlertsTask = null;
+  }
   logger.info('TaskScheduler detenido');
 }
 
@@ -116,4 +174,27 @@ async function runOnce() {
   return runTick('manual');
 }
 
-module.exports = { start, stop, runOnce };
+async function runAlertsTick(reason) {
+  if (runningAlertsTick) {
+    logger.info('Alerts tick ya en curso — saltando', { reason });
+    return null;
+  }
+  runningAlertsTick = (async () => {
+    try {
+      const pool = getPool();
+      const result = await evaluateAllAlerts(pool);
+      if (result.alerts > 0 || result.errors > 0) {
+        logger.info('Alerts tick', { reason, ...result });
+      }
+      return result;
+    } catch (err) {
+      logger.error('Alerts tick falló', { error: err.message, reason });
+      return null;
+    } finally {
+      runningAlertsTick = null;
+    }
+  })();
+  return runningAlertsTick;
+}
+
+module.exports = { start, stop, runOnce, runBillingOnce: () => runBillingTick('manual'), runAlertsOnce: () => runAlertsTick('manual') };

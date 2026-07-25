@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="50%" stop-color="#1e1b4b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="brandGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5b5ce2"/>
+      <stop offset="55%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#2dd4bf"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="20%" cy="30%">
+      <stop offset="0%" stop-color="rgba(91,92,226,0.25)"/>
+      <stop offset="100%" stop-color="rgba(91,92,226,0)"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="80%" cy="70%">
+      <stop offset="0%" stop-color="rgba(45,212,191,0.15)"/>
+      <stop offset="100%" stop-color="rgba(45,212,191,0)"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Fondo -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow1)"/>
+  <rect width="1200" height="630" fill="url(#glow2)"/>
+
+  <!-- Grid sutil -->
+  <g opacity="0.04">
+    <line x1="0" y1="105" x2="1200" y2="105" stroke="#818cf8" stroke-width="1"/>
+    <line x1="0" y1="210" x2="1200" y2="210" stroke="#818cf8" stroke-width="1"/>
+    <line x1="0" y1="315" x2="1200" y2="315" stroke="#818cf8" stroke-width="1"/>
+    <line x1="0" y1="420" x2="1200" y2="420" stroke="#818cf8" stroke-width="1"/>
+    <line x1="0" y1="525" x2="1200" y2="525" stroke="#818cf8" stroke-width="1"/>
+    <line x1="200" y1="0" x2="200" y2="630" stroke="#818cf8" stroke-width="1"/>
+    <line x1="400" y1="0" x2="400" y2="630" stroke="#818cf8" stroke-width="1"/>
+    <line x1="600" y1="0" x2="600" y2="630" stroke="#818cf8" stroke-width="1"/>
+    <line x1="800" y1="0" x2="800" y2="630" stroke="#818cf8" stroke-width="1"/>
+    <line x1="1000" y1="0" x2="1000" y2="630" stroke="#818cf8" stroke-width="1"/>
+  </g>
+
+  <!-- Logo -->
+  <g transform="translate(100, 180)">
+    <rect width="80" height="80" rx="20" fill="url(#brandGrad)"/>
+    <path d="M 64 26 A 28 28 0 1 0 64 54" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+  </g>
+
+  <!-- Título -->
+  <text x="210" y="230" font-family="'Inter Tight','Inter',-apple-system,sans-serif" font-size="64" font-weight="800" fill="#f1f5f9" letter-spacing="-2">
+    Coter<tspan fill="url(#brandGrad)"> Pro</tspan>
+  </text>
+
+  <!-- Tagline -->
+  <text x="210" y="272" font-family="'Inter',-apple-system,sans-serif" font-size="22" font-weight="500" fill="#94a3b8" letter-spacing="-0.3">
+    Continuidad terapéutica entre sesiones
+  </text>
+
+  <!-- Features row -->
+  <g transform="translate(100, 360)">
+    <rect x="0" y="0" width="310" height="110" rx="16" fill="rgba(30,27,75,0.6)" stroke="rgba(99,102,241,0.2)" stroke-width="1"/>
+    <text x="24" y="38" font-family="'Inter',-apple-system,sans-serif" font-size="16" font-weight="700" fill="#c7d2fe">Check-ins emocionales</text>
+    <text x="24" y="64" font-family="'Inter',-apple-system,sans-serif" font-size="14" font-weight="400" fill="#64748b">Ánimo, ansiedad y energía entre consultas</text>
+    <circle cx="278" cy="24" r="4" fill="#2dd4bf"/>
+  </g>
+
+  <g transform="translate(445, 360)">
+    <rect x="0" y="0" width="310" height="110" rx="16" fill="rgba(30,27,75,0.6)" stroke="rgba(99,102,241,0.2)" stroke-width="1"/>
+    <text x="24" y="38" font-family="'Inter',-apple-system,sans-serif" font-size="16" font-weight="700" fill="#c7d2fe">Tareas terapéuticas</text>
+    <text x="24" y="64" font-family="'Inter',-apple-system,sans-serif" font-size="14" font-weight="400" fill="#64748b">Ejercicios TCC con seguimiento clínico</text>
+    <circle cx="278" cy="24" r="4" fill="#2dd4bf"/>
+  </g>
+
+  <g transform="translate(790, 360)">
+    <rect x="0" y="0" width="310" height="110" rx="16" fill="rgba(30,27,75,0.6)" stroke="rgba(99,102,241,0.2)" stroke-width="1"/>
+    <text x="24" y="38" font-family="'Inter',-apple-system,sans-serif" font-size="16" font-weight="700" fill="#c7d2fe">Escalas clínicas</text>
+    <text x="24" y="64" font-family="'Inter',-apple-system,sans-serif" font-size="14" font-weight="400" fill="#64748b">PHQ-9, GAD-7, BDI-II y más</text>
+    <circle cx="278" cy="24" r="4" fill="#2dd4bf"/>
+  </g>
+
+  <!-- CTA pill -->
+  <g transform="translate(100, 510)">
+    <rect x="0" y="0" width="280" height="46" rx="23" fill="url(#brandGrad)"/>
+    <text x="140" y="29" font-family="'Inter',-apple-system,sans-serif" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">
+      Solicitar acceso pionero
+    </text>
+  </g>
+
+  <!-- URL -->
+  <text x="1100" y="610" font-family="'Inter',-apple-system,sans-serif" font-size="14" font-weight="500" fill="#475569" text-anchor="end">
+    coter.app
+  </text>
+</svg>

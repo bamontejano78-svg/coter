@@ -9,6 +9,7 @@ const { authenticatePatient } = require('../middleware/auth');
 const { audit, auditAccess, auditChange } = require('../utils/audit');
 const logger = require('../config/logger');
 const bus = require('../utils/eventBus');
+const { setPatientCookie, clearPatientCookie } = require('../utils/cookies');
 const { getSchema, validateResponses } = require('../utils/exerciseSchemas');
 const { encryptFieldsForKind, decryptFieldsForKind } = require('../utils/exerciseEncryption');
 // Helpers compartidos con routes/therapist.js para resolver schema y mergear
@@ -61,6 +62,7 @@ router.post('/connect', async (req, res) => {
       patientId, patientName: patientName || null, at: new Date().toISOString(),
     });
 
+    setPatientCookie(res, authToken);
     res.json({
       success: true,
       patient_id: patientId,
@@ -75,6 +77,11 @@ router.post('/connect', async (req, res) => {
   }
 });
 
+router.post('/:patientId/logout', authenticatePatient, async (_req, res) => {
+  clearPatientCookie(res);
+  res.json({ success: true });
+});
+
 // ─── Middleware de auth para todas las rutas con :patientId ────
 router.use('/:patientId', authenticatePatient);
 
@@ -83,7 +90,10 @@ router.post('/:patientId/check-ins', async (req, res) => {
   try {
     const { patientId } = req.params;
     const { mood, anxiety, energy, thoughts } = req.body;
-    if (!mood || !anxiety || !energy) return res.status(400).json({ error: 'Mood, anxiety y energy requeridos' });
+    if (mood === undefined || mood === null || anxiety === undefined || anxiety === null) {
+      return res.status(400).json({ error: 'Mood y anxiety requeridos' });
+    }
+    const effectiveEnergy = energy === undefined || energy === null ? 5 : energy;
 
     const pool = getPool();
     const { rows: connRows } = await pool.query(
@@ -94,13 +104,13 @@ router.post('/:patientId/check-ins', async (req, res) => {
     const id = uuidv4();
     await pool.query(
       'INSERT INTO check_ins (id, patient_id, mood, anxiety, energy, thoughts) VALUES ($1, $2, $3, $4, $5, $6)',
-      [id, patientId, mood, anxiety, energy || 5, encrypt(thoughts || '')]
+      [id, patientId, mood, anxiety, effectiveEnergy, encrypt(thoughts || '')]
     );
-    audit({ who: patientId, role: 'patient', action: 'create_checkin', resource: 'check_in', resourceId: id, ip: req.ip, metadata: { mood, anxiety, energy } });
+    audit({ who: patientId, role: 'patient', action: 'create_checkin', resource: 'check_in', resourceId: id, ip: req.ip, metadata: { mood, anxiety, energy: effectiveEnergy } });
 
     if (therapistId) {
       bus.publish(bus.topicFor('therapist', therapistId), 'checkin:new', {
-        patientId, checkInId: id, mood, anxiety, energy: energy || 5,
+        patientId, checkInId: id, mood, anxiety, energy: effectiveEnergy,
       });
     }
 

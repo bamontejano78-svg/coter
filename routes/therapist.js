@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { body, query, param, validationResult } = require('express-validator');
 const { getPool } = require('../database');
-const { authenticateToken } = require('../middleware/auth');
+const { authWithBilling } = require('../middleware/billing');
 const config = require('../config/env');
 const logger = require('../config/logger');
 const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
@@ -23,6 +23,11 @@ const bus = require('../utils/eventBus');
 // ya mergeada, de modo que el cliente del terapeuta pueda abrir el panel
 // "Ver respuestas" sin un round-trip extra.
 const { fetchLatestSessionsForAssignments, decodeSessionResponses, schemaForAssignment } = require('../utils/exerciseHelpers');
+const { createTrialSubscription } = require('../utils/billing');
+const { createStripeCustomer } = require('../utils/stripe');
+const { SCALE_KINDS, scoreResponses, getScoreHistory } = require('../utils/clinicalScales');
+const { getAlerts, getUnreadAlerts, markAlertsRead, updateAlertStatus } = require('../utils/clinicalAlerts');
+const { COOKIE_NAMES, getCookie, setTherapistCookies, clearTherapistCookies } = require('../utils/cookies');
 
 // ─── Email transporter (lazy init) ──────────────────────────────
 let mailTransporter = null;
@@ -184,8 +189,18 @@ router.post('/register', [
 
     const token = jwt.sign({ id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
     const refreshToken = await createRefreshToken(pool, id);
+
+    // Crear suscripción en trial (14 días)
+    await createTrialSubscription(pool, id);
+
+    // Crear Stripe customer (async, no bloquea la respuesta)
+    createStripeCustomer(pool, id, email, name).catch(err => {
+      logger.error('Error creando Stripe customer en registro', { error: err.message, id });
+    });
+
     logger.info('Terapeuta registrado', { id, email });
     audit({ who: id, role: 'therapist', action: 'register', resource: 'therapist', resourceId: id, ip: req.ip, metadata: { email, name, specialty } });
+    setTherapistCookies(res, token, refreshToken);
     res.json({ success: true, therapist: { id, name, email, specialty }, token, refresh_token: refreshToken });
   } catch (err) {
     logger.error('Error en registro', { error: err.message });
@@ -216,6 +231,7 @@ router.post('/login', [
     const token = jwt.sign({ id: therapist.id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
     const refreshToken = await createRefreshToken(pool, therapist.id);
     audit({ who: therapist.id, role: 'therapist', action: 'login', resource: 'therapist', resourceId: therapist.id, ip: req.ip });
+    setTherapistCookies(res, token, refreshToken);
     res.json({
       success: true,
       therapist: { id: therapist.id, name: therapist.name, email: therapist.email, specialty: therapist.specialty },
@@ -229,11 +245,12 @@ router.post('/login', [
 });
 
 // ─── REFRESH TOKEN ────────────────────────────────────────────
-router.post('/refresh-token', [
-  body('refresh_token').notEmpty().withMessage('Refresh token requerido'),
-], validate, async (req, res) => {
+router.post('/refresh-token', async (req, res) => {
   try {
-    const { refresh_token } = req.body;
+    const refresh_token = (req.body && req.body.refresh_token) || getCookie(req, COOKIE_NAMES.therapistRefresh);
+    if (!refresh_token) {
+      return res.status(400).json({ success: false, error: 'Refresh token requerido' });
+    }
     const pool = getPool();
 
     // Buscar el refresh token
@@ -259,6 +276,7 @@ router.post('/refresh-token', [
 
     audit({ who: therapistId, role: 'therapist', action: 'refresh_token', resource: 'refresh_token', resourceId: therapistId, ip: req.ip });
 
+    setTherapistCookies(res, newAccessToken, newRefreshToken);
     res.json({
       success: true,
       token: newAccessToken,
@@ -271,10 +289,11 @@ router.post('/refresh-token', [
 });
 
 // ─── LOGOUT (revocar refresh tokens) ──────────────────────────
-router.post('/logout', authenticateToken, async (req, res) => {
+router.post('/logout', authWithBilling, async (req, res) => {
   try {
     const pool = getPool();
     await revokeAllRefreshTokens(pool, req.user.id);
+    clearTherapistCookies(res);
     logger.info('Sesiones cerradas para terapeuta', { id: req.user.id });
     audit({ who: req.user.id, role: 'therapist', action: 'logout', resource: 'therapist', resourceId: req.user.id, ip: req.ip });
     res.json({ success: true, message: 'Sesion cerrada' });
@@ -285,7 +304,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
 });
 
 // ─── CODIGOS DE CONEXION ──────────────────────────────────────
-router.post('/connection-codes', authenticateToken, [
+router.post('/connection-codes', authWithBilling, [
   body('duration_hours').optional().isInt({ min: 1, max: 8760 }),
   body('max_uses').optional().isInt({ min: 1, max: 100 }),
   body('patient_name').optional().trim(),
@@ -320,15 +339,18 @@ router.post('/connection-codes', authenticateToken, [
     // Resto = genérico (no filtramos SQL al cliente).
     let errorMessage = 'Error al crear codigo';
     if (err && err.code === '42703' && err.message && /patient_name/i.test(err.message)) {
-      errorMessage = 'La columna patient_name no existe en la BD. Pídele a soporte técnico que corra migrations/004_add_patient_name.sql';
+      errorMessage = 'La columna patient_name no existe en la BD. Pidele a soporte tecnico que aplique la migration 004_add_patient_name.sql';
     } else if (err && (err.code === '08006' || err.code === '08001' || err.code === '57P01')) {
       errorMessage = 'Error temporal de conexión con la BD. Reintenta en unos segundos.';
     }
-    res.status(500).json({ success: false, error: errorMessage });
+    const statusCode = err && err.code === '42703' && err.message && /patient_name/i.test(err.message)
+      ? 200
+      : 500;
+    res.status(statusCode).json({ success: false, error: errorMessage });
   }
 });
 
-router.get('/connection-codes', authenticateToken, async (req, res) => {
+router.get('/connection-codes', authWithBilling, async (req, res) => {
   try {
     const pool = getPool();
     const { rows } = await pool.query(
@@ -343,7 +365,7 @@ router.get('/connection-codes', authenticateToken, async (req, res) => {
 });
 
 // ─── PACIENTES ────────────────────────────────────────────────
-router.get('/patients', authenticateToken, async (req, res) => {
+router.get('/patients', authWithBilling, async (req, res) => {
   try {
     const pool = getPool();
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
@@ -381,7 +403,7 @@ router.get('/patients', authenticateToken, async (req, res) => {
 });
 
 // ─── DASHBOARD ────────────────────────────────────────────────
-router.get('/dashboard', authenticateToken, async (req, res) => {
+router.get('/dashboard', authWithBilling, async (req, res) => {
   try {
     const pool = getPool();
     const tid = req.user.id;
@@ -415,7 +437,7 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
 // eventuales re-links. El paciente sigue pudiendo usar su app con el
 // auth_token existente, pero no podrá enviar mensajes nuevos a este
 // terapeuta (porque messages POST requiere status='active').
-router.delete('/patients/:patientId/connections', authenticateToken, async (req, res) => {
+router.delete('/patients/:patientId/connections', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
     const { reason } = req.body || {};
@@ -482,7 +504,7 @@ router.delete('/patients/:patientId/connections', authenticateToken, async (req,
 });
 
 // ─── PERFIL DE PACIENTE ──────────────────────────────────────
-router.get('/patients/:patientId', authenticateToken, async (req, res) => {
+router.get('/patients/:patientId', authWithBilling, async (req, res) => {
   try {
     const pool = getPool();
     const { patientId } = req.params;
@@ -490,7 +512,7 @@ router.get('/patients/:patientId', authenticateToken, async (req, res) => {
     const limitMessages = Math.min(parseInt(req.query.limit_messages) || 100, 200);
 
     const { rows: connRows } = await pool.query(
-      "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
+      'SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2',
       [req.user.id, patientId]
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
@@ -547,8 +569,257 @@ router.get('/patients/:patientId', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── MEMORIA TERAPÉUTICA AUMENTADA (Pre-sesión) ──────────────
+// Sintetiza cambios emocionales, eventos importantes y adherencia a
+// ejercicios desde la última sesión (última nota clínica o últimos 14 días).
+// El terapeuta ve esta vista antes de abrir el chat con el paciente.
+router.get('/patients/:patientId/pre-session', authWithBilling, async (req, res) => {
+  try {
+    const pool = getPool();
+    const { patientId } = req.params;
+
+    const { rows: connRows } = await pool.query(
+      "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
+      [req.user.id, patientId]
+    );
+    if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    // ── 1. Última nota clínica (proxy de "última sesión") ──────
+    const { rows: lastNoteRows } = await pool.query(
+      'SELECT created_at FROM clinical_notes WHERE patient_id = $1 AND therapist_id = $2 ORDER BY created_at DESC LIMIT 1',
+      [patientId, req.user.id]
+    );
+    const lastSessionDate = lastNoteRows.length > 0 ? lastNoteRows[0].created_at : null;
+    const sinceDate = lastSessionDate
+      ? lastSessionDate.toISOString()
+      : new Date(Date.now() - 14 * 86400000).toISOString();
+    const daysSinceLastSession = lastSessionDate
+      ? Math.round((Date.now() - new Date(lastSessionDate).getTime()) / 86400000)
+      : null;
+
+    // ── 2. Check-ins emocionales (14 días para tendencia) ─────
+    const { rows: checkIns } = await pool.query(
+      'SELECT mood, anxiety, energy, created_at FROM check_ins WHERE patient_id = $1 AND created_at >= NOW() - INTERVAL \'14 days\' ORDER BY created_at ASC',
+      [patientId]
+    );
+
+    // Tendencia: comparar primera mitad vs segunda mitad
+    let emotionalTrend = { direction: 'no_data', current: null, previous: null, weeklyBreakdown: [] };
+    if (checkIns.length >= 4) {
+      const mid = Math.floor(checkIns.length / 2);
+      const firstHalf = checkIns.slice(0, mid);
+      const secondHalf = checkIns.slice(mid);
+      const avg = (arr, field) => +(arr.reduce((s, c) => s + (c[field] || 5), 0) / arr.length).toFixed(1);
+      emotionalTrend.previous = { mood: avg(firstHalf, 'mood'), anxiety: avg(firstHalf, 'anxiety'), energy: avg(firstHalf, 'energy') };
+      emotionalTrend.current = { mood: avg(secondHalf, 'mood'), anxiety: avg(secondHalf, 'anxiety'), energy: avg(secondHalf, 'energy') };
+      const moodDelta = emotionalTrend.current.mood - emotionalTrend.previous.mood;
+      if (moodDelta >= 1.5) emotionalTrend.direction = 'improving';
+      else if (moodDelta <= -1.5) emotionalTrend.direction = 'declining';
+      else emotionalTrend.direction = 'stable';
+    } else if (checkIns.length >= 1) {
+      const latest = checkIns[checkIns.length - 1];
+      emotionalTrend.current = { mood: latest.mood, anxiety: latest.anxiety, energy: latest.energy || 5 };
+      emotionalTrend.direction = 'insufficient_data';
+    }
+
+    // Desglose diario (últimos 14 días)
+    const dailyMap = {};
+    checkIns.forEach(c => {
+      const day = new Date(c.created_at).toISOString().slice(0, 10);
+      if (!dailyMap[day]) dailyMap[day] = { day, moods: [], anxieties: [], energies: [] };
+      dailyMap[day].moods.push(c.mood);
+      dailyMap[day].anxieties.push(c.anxiety);
+      dailyMap[day].energies.push(c.energy || 5);
+    });
+    emotionalTrend.weeklyBreakdown = Object.values(dailyMap).map(d => ({
+      day: d.day,
+      mood: +(d.moods.reduce((a, b) => a + b, 0) / d.moods.length).toFixed(1),
+      anxiety: +(d.anxieties.reduce((a, b) => a + b, 0) / d.anxieties.length).toFixed(1),
+      energy: +(d.energies.reduce((a, b) => a + b, 0) / d.energies.length).toFixed(1),
+      count: d.moods.length,
+    })).sort((a, b) => a.day.localeCompare(b.day));
+
+    // ── 3. Eventos clave desde la última sesión ─────────────────
+    const keyEvents = [];
+
+    // Picos/bajones de ánimo
+    if (checkIns.length >= 3) {
+      const moods = checkIns.map(c => ({ mood: c.mood, date: c.created_at }));
+      const maxMood = moods.reduce((a, b) => b.mood > a.mood ? b : a, moods[0]);
+      const minMood = moods.reduce((a, b) => b.mood < a.mood ? b : a, moods[0]);
+      if (maxMood.mood >= 8) {
+        keyEvents.push({
+          type: 'mood_spike',
+          description: 'Pico de ánimo positivo: ' + maxMood.mood + '/10',
+          date: maxMood.date,
+          icon: '😊',
+          severity: 'positive',
+        });
+      }
+      if (minMood.mood <= 3) {
+        keyEvents.push({
+          type: 'mood_drop',
+          description: 'Bajón de ánimo: ' + minMood.mood + '/10',
+          date: minMood.date,
+          icon: '⚠️',
+          severity: 'warning',
+        });
+      }
+    }
+
+    // Ansiedad elevada
+    if (checkIns.length >= 1) {
+      const highAnxiety = checkIns.filter(c => c.anxiety >= 8);
+      if (highAnxiety.length >= 2) {
+        keyEvents.push({
+          type: 'anxiety_spike',
+          description: highAnxiety.length + ' episodios de ansiedad elevada (≥8/10)',
+          date: highAnxiety[highAnxiety.length - 1].created_at,
+          icon: '😰',
+          severity: 'warning',
+        });
+      }
+    }
+
+    // Mensajes del paciente sin leer
+    const { rows: unreadRows } = await pool.query(
+      'SELECT COUNT(*)::int AS count FROM messages WHERE patient_id = $1 AND is_therapist = FALSE AND created_at >= $2::timestamptz',
+      [patientId, sinceDate]
+    );
+    if (unreadRows[0].count > 0) {
+      keyEvents.push({
+        type: 'messages',
+        description: unreadRows[0].count + ' mensaje' + (unreadRows[0].count === 1 ? '' : 's') + ' del paciente desde la última sesión',
+        count: unreadRows[0].count,
+        icon: '💬',
+        severity: 'info',
+      });
+    }
+
+    // Asignaciones completadas
+    const { rows: completedSince } = await pool.query(
+      "SELECT id, title FROM assignments WHERE patient_id = $1 AND status = 'completed' AND completed_at >= $2::timestamptz ORDER BY completed_at DESC LIMIT 5",
+      [patientId, sinceDate]
+    );
+    completedSince.forEach(a => {
+      keyEvents.push({
+        type: 'assignment_completed',
+        description: 'Completó: "' + a.title + '"',
+        icon: '✅',
+        severity: 'positive',
+      });
+    });
+
+    // Metas con progreso
+    const { rows: activeGoals } = await pool.query(
+      'SELECT id, title, metric, current_value, target_value, status FROM goals WHERE patient_id = $1 AND status = \'active\' ORDER BY created_at DESC LIMIT 5',
+      [patientId]
+    );
+    activeGoals.forEach(g => {
+      const pct = g.target_value > 0 ? Math.round((g.current_value / g.target_value) * 100) : 0;
+      if (pct >= 50) {
+        keyEvents.push({
+          type: 'goal_progress',
+          description: 'Progreso en "' + g.title + '": ' + g.current_value + '/' + g.target_value + ' (' + pct + '%)',
+          icon: '🎯',
+          severity: pct >= 80 ? 'positive' : 'info',
+        });
+      }
+    });
+
+    // ── 4. Adherencia a ejercicios ────────────────────────────
+    const { rows: allAssignments } = await pool.query(
+      'SELECT id, title, status, exercise_kind, due_date FROM assignments WHERE patient_id = $1 ORDER BY created_at DESC',
+      [patientId]
+    );
+    const totalAssignments = allAssignments.length;
+    const completedAssignments = allAssignments.filter(a => a.status === 'completed').length;
+    const pendingAssignments = totalAssignments - completedAssignments;
+    const completionRate = totalAssignments > 0 ? Math.round((completedAssignments / totalAssignments) * 100) : 0;
+
+    // Trending: cuántas completó en los últimos 7 días vs penúltimos 7
+    const last7 = allAssignments.filter(a => a.status === 'completed' && a.completed_at && new Date(a.completed_at) >= new Date(Date.now() - 7 * 86400000)).length;
+    const prev7 = allAssignments.filter(a => a.status === 'completed' && a.completed_at && new Date(a.completed_at) >= new Date(Date.now() - 14 * 86400000) && new Date(a.completed_at) < new Date(Date.now() - 7 * 86400000)).length;
+
+    // Clinical exercise sessions
+    const { rows: sessions } = await pool.query(
+      'SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_complete)::int AS completed FROM exercise_sessions WHERE patient_id = $1',
+      [patientId]
+    );
+
+    const adherence = {
+      totalAssignments,
+      completedAssignments,
+      pendingAssignments,
+      completionRate,
+      recentCompletions: last7,
+      previousCompletions: prev7,
+      completionTrend: last7 > prev7 ? 'up' : last7 < prev7 ? 'down' : prev7 === 0 && last7 === 0 ? 'none' : 'stable',
+      totalSessions: sessions[0].total,
+      completedSessions: sessions[0].completed,
+    };
+
+    // ── 5. Métricas generales ─────────────────────────────────
+    const { rows: streakRows } = await pool.query(
+      'SELECT created_at::date as day FROM check_ins WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 30',
+      [patientId]
+    );
+    let streakDays = 0;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    for (let i = 0; i < streakRows.length; i++) {
+      const d = new Date(streakRows[i].day); d.setHours(0, 0, 0, 0);
+      const expected = new Date(today); expected.setDate(expected.getDate() - streakDays);
+      if (d.getTime() === expected.getTime()) streakDays++;
+      else if (d.getTime() < expected.getTime()) break;
+    }
+
+    const latestCheckIn = checkIns.length > 0 ? checkIns[checkIns.length - 1] : null;
+
+    // ── 6. Resumen narrativo ──────────────────────────────────
+    let summary = '';
+    const patientName = connRows[0].patient_name || 'El paciente';
+    if (emotionalTrend.direction === 'no_data' || emotionalTrend.direction === 'insufficient_data') {
+      summary = 'Aún no hay suficientes check-ins para detectar una tendencia emocional.';
+    } else {
+      const dirLabel = emotionalTrend.direction === 'improving' ? 'mejora' : emotionalTrend.direction === 'declining' ? 'disminución' : 'estabilidad';
+      const moodWord = emotionalTrend.current && emotionalTrend.current.mood >= 7 ? 'positivo' : emotionalTrend.current && emotionalTrend.current.mood <= 3 ? 'bajo' : 'moderado';
+      summary = patientName + ' muestra ' + dirLabel + ' en estado de ánimo (' + (emotionalTrend.current ? emotionalTrend.current.mood : '?') + '/10, nivel ' + moodWord + '). ';
+      if (adherence.totalAssignments > 0) {
+        summary += 'Adherencia a ejercicios: ' + adherence.completionRate + '% (' + adherence.completedAssignments + '/' + adherence.totalAssignments + ' tareas). ';
+      }
+      if (streakDays >= 3) {
+        summary += 'Registro diario durante ' + streakDays + ' días consecutivos. ';
+      }
+      if (keyEvents.filter(e => e.severity === 'warning').length > 0) {
+        summary += '⚠️ Atención: se detectaron señales de alerta. Revisa los eventos clave.';
+      }
+    }
+
+    res.json({
+      success: true,
+      preSession: {
+        emotionalTrend,
+        keyEvents: keyEvents.slice(0, 10),
+        adherence,
+        metrics: {
+          streakDays,
+          totalCheckIns: checkIns.length,
+          lastCheckIn: latestCheckIn ? latestCheckIn.created_at : null,
+          lastCheckInMood: latestCheckIn ? latestCheckIn.mood : null,
+        },
+        summary,
+        lastSessionDate,
+        daysSinceLastSession,
+      },
+    });
+  } catch (err) {
+    logger.error('Error pre-sesión', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
 // ─── MENSAJES DEL TERAPEUTA ───────────────────────────────────
-router.post('/patients/:patientId/messages', authenticateToken, async (req, res) => {
+router.post('/patients/:patientId/messages', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
     const { message } = req.body;
@@ -592,7 +863,7 @@ router.post('/patients/:patientId/messages', authenticateToken, async (req, res)
 });
 
 // ─── ASIGNACIONES ────────────────────────────────────────────
-router.post('/patients/:patientId/assignments', authenticateToken, async (req, res) => {
+router.post('/patients/:patientId/assignments', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
     const {
@@ -681,7 +952,7 @@ router.post('/patients/:patientId/assignments', authenticateToken, async (req, r
   }
 });
 
-router.put('/patients/:patientId/assignments/:assignmentId', authenticateToken, async (req, res) => {
+router.put('/patients/:patientId/assignments/:assignmentId', authWithBilling, async (req, res) => {
   try {
     const { patientId, assignmentId } = req.params;
     const { completed } = req.body;
@@ -699,7 +970,7 @@ router.put('/patients/:patientId/assignments/:assignmentId', authenticateToken, 
 });
 
 // ─── OBJETIVOS ────────────────────────────────────────────────
-router.post('/patients/:patientId/goals', authenticateToken, async (req, res) => {
+router.post('/patients/:patientId/goals', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
     const { title, metric, target_value, duration_days } = req.body;
@@ -725,7 +996,7 @@ router.post('/patients/:patientId/goals', authenticateToken, async (req, res) =>
   }
 });
 
-router.put('/patients/:patientId/goals/:goalId', authenticateToken, async (req, res) => {
+router.put('/patients/:patientId/goals/:goalId', authWithBilling, async (req, res) => {
   try {
     const { patientId, goalId } = req.params;
     const { current_value, status } = req.body;
@@ -764,7 +1035,7 @@ router.put('/patients/:patientId/goals/:goalId', authenticateToken, async (req, 
 });
 
 // ─── CALENDARIO ───────────────────────────────────────────────
-router.get('/calendar', authenticateToken, async (req, res) => {
+router.get('/calendar', authWithBilling, async (req, res) => {
   try {
     const { month } = req.query;
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
@@ -808,7 +1079,7 @@ router.get('/calendar', authenticateToken, async (req, res) => {
 });
 
 // ─── NOTAS CLINICAS ───────────────────────────────────────────
-router.get('/patients/:patientId/clinical-notes', authenticateToken, async (req, res) => {
+router.get('/patients/:patientId/clinical-notes', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
     const pool = getPool();
@@ -829,7 +1100,7 @@ router.get('/patients/:patientId/clinical-notes', authenticateToken, async (req,
   }
 });
 
-router.post('/patients/:patientId/clinical-notes', authenticateToken, async (req, res) => {
+router.post('/patients/:patientId/clinical-notes', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
     const { subjective, objective, assessment, plan } = req.body;
@@ -864,7 +1135,7 @@ router.post('/patients/:patientId/clinical-notes', authenticateToken, async (req
   }
 });
 
-router.put('/patients/:patientId/clinical-notes/:noteId', authenticateToken, async (req, res) => {
+router.put('/patients/:patientId/clinical-notes/:noteId', authWithBilling, async (req, res) => {
   try {
     const { patientId, noteId } = req.params;
     const { subjective, objective, assessment, plan } = req.body;
@@ -894,7 +1165,7 @@ router.put('/patients/:patientId/clinical-notes/:noteId', authenticateToken, asy
   }
 });
 
-router.delete('/patients/:patientId/clinical-notes/:noteId', authenticateToken, async (req, res) => {
+router.delete('/patients/:patientId/clinical-notes/:noteId', authWithBilling, async (req, res) => {
   try {
     const { patientId, noteId } = req.params;
     const pool = getPool();
@@ -914,7 +1185,7 @@ router.delete('/patients/:patientId/clinical-notes/:noteId', authenticateToken, 
 });
 
 // ─── BIBLIOTECA TCC ───────────────────────────────────────────
-router.get('/task-templates', authenticateToken, async (req, res) => {
+router.get('/task-templates', authWithBilling, async (req, res) => {
   try {
     const { category } = req.query;
     const pool = getPool();
@@ -952,7 +1223,7 @@ router.get('/task-templates', authenticateToken, async (req, res) => {
 // instrucciones de texto y marca completada (caso legacy preservado por
 // default en migration 007). La resolución sigue la prioridad de
 // utils/exerciseSchemas.js → getSchema(): BD gana, estático fallback.
-router.get('/exercise-schemas', authenticateToken, async (req, res) => {
+router.get('/exercise-schemas', authWithBilling, async (req, res) => {
   try {
     const { kind, mode, phobia } = req.query;
     if (!kind) {
@@ -975,7 +1246,7 @@ router.get('/exercise-schemas', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/task-templates', authenticateToken, async (req, res) => {
+router.post('/task-templates', authWithBilling, async (req, res) => {
   try {
     const {
       category, title, instructions,
@@ -1040,7 +1311,7 @@ router.post('/task-templates', authenticateToken, async (req, res) => {
   }
 });
 
-router.put('/task-templates/:id', authenticateToken, async (req, res) => {
+router.put('/task-templates/:id', authWithBilling, async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -1121,7 +1392,7 @@ router.put('/task-templates/:id', authenticateToken, async (req, res) => {
   }
 });
 
-router.delete('/task-templates/:id', authenticateToken, async (req, res) => {
+router.delete('/task-templates/:id', authWithBilling, async (req, res) => {
   try {
     const { id } = req.params;
     const pool = getPool();
@@ -1136,8 +1407,237 @@ router.delete('/task-templates/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── ESCALAS CLÍNICAS — Historial de puntuaciones ──────────────────
+router.get('/patients/:patientId/scale-history', authWithBilling, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const { kind } = req.query;
+    const pool = getPool();
+
+    const { rows: connRows } = await pool.query(
+      "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
+      [req.user.id, patientId]
+    );
+    if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    if (!kind || !SCALE_KINDS.includes(kind)) {
+      // Devolver historial de todas las escalas
+      const results = {};
+      for (const k of SCALE_KINDS) {
+        results[k] = await getScoreHistory(pool, patientId, k);
+      }
+      return res.json({ success: true, scales: results });
+    }
+
+    const history = await getScoreHistory(pool, patientId, kind);
+    res.json({ success: true, kind, history });
+  } catch (err) {
+    logger.error('Error scale-history', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
+// ─── ALERTAS CLÍNICAS ──────────────────────────────────────────────
+router.get('/alerts', authWithBilling, async (req, res) => {
+  try {
+    const pool = getPool();
+    const alerts = await getAlerts(pool, req.user.id, { status: req.query.status || 'unread' });
+    res.json({ success: true, alerts, count: alerts.length });
+  } catch (err) {
+    logger.error('Error cargando alertas', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
+router.put('/alerts/read', authWithBilling, async (req, res) => {
+  try {
+    const { alertIds } = req.body;
+    const pool = getPool();
+    await markAlertsRead(pool, req.user.id, alertIds);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Error marcando alertas', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
+router.put('/alerts/status', authWithBilling, async (req, res) => {
+  try {
+    const { alertIds, status, note } = req.body || {};
+    if (!Array.isArray(alertIds) || alertIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'alertIds requerido' });
+    }
+    if (!['open', 'acknowledged', 'resolved'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'Estado invalido' });
+    }
+    const pool = getPool();
+    await updateAlertStatus(pool, req.user.id, alertIds, status, note || null);
+    auditChange(req, 'update_alert_status', 'clinical_alert', alertIds.join(','), { status });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Error actualizando alertas', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
+// ─── INSIGHTS SEMANALES ────────────────────────────────────────────
+router.get('/patients/:patientId/weekly-insights', authWithBilling, async (req, res) => {
+  try {
+    const pool = getPool();
+    const { patientId } = req.params;
+
+    const { rows: connRows } = await pool.query(
+      "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
+      [req.user.id, patientId]
+    );
+    if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    const patientName = connRows[0].patient_name || 'Paciente';
+
+    // ── Check-ins de los últimos 7 días ──
+    const { rows: checkIns } = await pool.query(
+      `SELECT mood, anxiety, energy, created_at FROM check_ins
+       WHERE patient_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
+       ORDER BY created_at ASC`,
+      [patientId]
+    );
+
+    // ── Check-ins de los 7 días anteriores (para comparar) ──
+    const { rows: prevCheckIns } = await pool.query(
+      `SELECT mood, anxiety, energy FROM check_ins
+       WHERE patient_id = $1
+         AND created_at >= NOW() - INTERVAL '14 days'
+         AND created_at < NOW() - INTERVAL '7 days'`,
+      [patientId]
+    );
+
+    // ── Tareas ──
+    const { rows: assignments } = await pool.query(
+      `SELECT title, status FROM assignments
+       WHERE patient_id = $1
+         AND (created_at >= NOW() - INTERVAL '7 days' OR status = 'assigned')
+       ORDER BY created_at DESC`,
+      [patientId]
+    );
+
+    // ── Metas ──
+    const { rows: goals } = await pool.query(
+      'SELECT title, current_value, target_value, status FROM goals WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 5',
+      [patientId]
+    );
+
+    // ── Escalas clínicas completadas ──
+    const scaleScores = {};
+    for (const kind of SCALE_KINDS) {
+      const history = await getScoreHistory(pool, patientId, kind);
+      if (history.length > 0) scaleScores[kind] = history;
+    }
+
+    // ── Generar insights ──
+    const insights = [];
+
+    // 1. Estado de ánimo
+    if (checkIns.length >= 3) {
+      const avgMood = +(checkIns.reduce((s, c) => s + c.mood, 0) / checkIns.length).toFixed(1);
+      const avgAnxiety = +(checkIns.reduce((s, c) => s + c.anxiety, 0) / checkIns.length).toFixed(1);
+      const avgEnergy = +(checkIns.reduce((s, c) => s + (c.energy || 5), 0) / checkIns.length).toFixed(1);
+
+      const moodWord = avgMood >= 7 ? 'positivo' : avgMood <= 3 ? 'bajo' : 'moderado';
+      insights.push({
+        type: 'mood_summary',
+        title: 'Estado de ánimo',
+        text: 'Esta semana tu ánimo promedio fue de ' + avgMood + '/10 (nivel ' + moodWord + '), con ansiedad media de ' + avgAnxiety + '/10 y energía de ' + avgEnergy + '/10.',
+        data: { avgMood, avgAnxiety, avgEnergy, checkInCount: checkIns.length },
+      });
+
+      if (prevCheckIns.length >= 3) {
+        const prevMood = +(prevCheckIns.reduce((s, c) => s + c.mood, 0) / prevCheckIns.length).toFixed(1);
+        const delta = avgMood - prevMood;
+        if (Math.abs(delta) >= 0.5) {
+          insights.push({
+            type: 'mood_change',
+            title: 'Cambio respecto a la semana anterior',
+            text: 'Tu ánimo ' + (delta >= 0 ? 'mejoró' : 'disminuyó') + ' ' + Math.abs(delta).toFixed(1) + ' puntos respecto a la semana anterior (' + prevMood + ' → ' + avgMood + ').',
+            data: { delta, prevMood, currentMood: avgMood },
+          });
+        }
+      }
+    } else if (checkIns.length === 0) {
+      insights.push({
+        type: 'no_checkins',
+        title: 'Sin registros esta semana',
+        text: 'No has registrado check-ins esta semana. Registrar tu estado de ánimo ayuda a tu terapeuta a seguir tu evolución.',
+        data: {},
+      });
+    }
+
+    // 2. Ejercicios
+    const completed = assignments.filter(a => a.status === 'completed').length;
+    const pending = assignments.filter(a => a.status === 'assigned').length;
+    if (completed > 0 || pending > 0) {
+      let exerciseText = 'Esta semana ';
+      if (completed > 0) exerciseText += 'completaste ' + completed + ' ejercicio' + (completed === 1 ? '' : 's');
+      if (completed > 0 && pending > 0) exerciseText += ' y ';
+      if (pending > 0) exerciseText += 'tienes ' + pending + ' pendiente' + (pending === 1 ? '' : 's');
+      exerciseText += '.';
+      insights.push({
+        type: 'exercise_adherence',
+        title: 'Adherencia a ejercicios',
+        text: exerciseText,
+        data: { completed, pending },
+      });
+    }
+
+    // 3. Metas
+    goals.forEach(g => {
+      const pct = g.target_value > 0 ? Math.round((g.current_value / g.target_value) * 100) : 0;
+      if (pct > 0 && g.status === 'active') {
+        insights.push({
+          type: 'goal_progress',
+          title: 'Progreso: "' + g.title + '"',
+          text: 'Llevas un ' + pct + '% de tu meta "' + g.title + '" (' + g.current_value + '/' + g.target_value + '). ¡Sigue así!',
+          data: { goal: g.title, current: g.current_value, target: g.target_value, percentage: pct },
+        });
+      }
+    });
+
+    // 4. Escalas clínicas
+    for (const [kind, history] of Object.entries(scaleScores)) {
+      const latest = history[history.length - 1];
+      const scaleNames = { phq9: 'PHQ-9 (Depresión)', gad7: 'GAD-7 (Ansiedad)', bdiii: 'BDI-II (Depresión)' };
+      if (latest && latest.total !== null) {
+        let scaleText = 'Tu puntuación en ' + scaleNames[kind] + ' fue ' + latest.total + '/' + latest.max + ' — nivel ' + latest.label.toLowerCase() + '.';
+        if (history.length >= 2) {
+          const prev = history[history.length - 2];
+          const delta = latest.total - prev.total;
+          if (delta !== 0) {
+            scaleText += ' ' + (delta < 0 ? '↓ Bajó ' : '↑ Subió ') + Math.abs(delta) + ' puntos desde la medición anterior (' + new Date(prev.completed_at).toLocaleDateString('es-ES') + ').';
+          }
+        }
+        insights.push({
+          type: 'clinical_scale',
+          title: scaleNames[kind] || kind,
+          text: scaleText,
+          data: { kind, total: latest.total, max: latest.max, severity: latest.severity, label: latest.label, history },
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      insights,
+      patientName,
+      weekStart: new Date(Date.now() - 7 * 86400000).toISOString(),
+      weekEnd: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error('Error weekly-insights', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
 // ─── EXPORTACION ──────────────────────────────────────────────
-router.get('/export/:patientId', authenticateToken, async (req, res) => {
+router.get('/export/:patientId', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
     const pool = getPool();

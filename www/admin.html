@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Coter Pro — Panel de administración. Métricas, estadísticas y gestión de la plataforma.">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Coter Pro — Administración</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/css/admin.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body class="admin-body">
+  <!-- ════════ Login Screen ════════ -->
+  <div id="loginScreen" class="login-screen">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="login-brand-mark">
+          <svg width="22" height="22" viewBox="0 0 24 24" focusable="false">
+            <path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <span class="login-brand-text">Coter Pro</span>
+      </div>
+      <h1 class="login-title">Panel de Administración</h1>
+      <p class="login-subtitle">Acceso restringido al equipo de Coter</p>
+      <form id="loginForm" class="login-form" autocomplete="off">
+        <div class="login-field">
+          <label for="adminPassword" class="login-label">Contraseña de administrador</label>
+          <input type="password" id="adminPassword" class="login-input" placeholder="••••••••" required autofocus>
+        </div>
+        <button type="submit" id="loginBtn" class="login-btn">
+          <span id="loginBtnText">Acceder al panel</span>
+          <span id="loginSpinner" class="spinner hidden"></span>
+        </button>
+        <p id="loginError" class="login-error hidden"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ════════ Dashboard Screen ════════ -->
+  <div id="dashboardScreen" class="dashboard-screen hidden">
+    <header class="admin-header">
+      <div class="admin-brand">
+        <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#818cf8);display:inline-flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 2px 8px rgba(99,102,241,.25)">
+          <svg width="18" height="18" viewBox="0 0 24 24" focusable="false">
+            <path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <span class="admin-brand-text">Coter Pro <span class="admin-badge">ADMIN</span></span>
+      </div>
+      <div class="admin-header-right">
+        <span id="lastUpdated" class="last-updated"></span>
+        <button id="refreshBtn" class="btn-refresh" title="Actualizar datos">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+          Actualizar
+        </button>
+        <button id="logoutBtn" class="btn-logout">Salir</button>
+      </div>
+    </header>
+
+    <main class="admin-main">
+      <!-- KPI Cards Row -->
+      <section class="stats-grid">
+        <div class="stat-card stat-card--accent1" data-kpi="therapists">
+          <div class="stat-icon">🧑‍⚕️</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statTherapists">—</div>
+            <div class="stat-label">Terapeutas totales</div>
+          </div>
+          <div class="stat-sub" id="statTherapistsSub">Activos: — · Este mes: —</div>
+        </div>
+        <div class="stat-card stat-card--accent2" data-kpi="patients">
+          <div class="stat-icon">👥</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statPatients">—</div>
+            <div class="stat-label">Pacientes totales</div>
+          </div>
+          <div class="stat-sub" id="statPatientsSub">Activos: — · Este mes: —</div>
+        </div>
+        <div class="stat-card stat-card--accent3" data-kpi="checkins">
+          <div class="stat-icon">📊</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statCheckIns">—</div>
+            <div class="stat-label">Check-ins totales</div>
+          </div>
+          <div class="stat-sub" id="statCheckInsSub">Hoy: —</div>
+        </div>
+        <div class="stat-card stat-card--accent4" data-kpi="scales">
+          <div class="stat-icon">📋</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statScales">—</div>
+            <div class="stat-label">Escalas esta semana</div>
+          </div>
+          <div class="stat-sub" id="statScalesSub">PHQ-9 · GAD-7 · BDI-II</div>
+        </div>
+      </section>
+
+      <!-- Second Row -->
+      <section class="stats-grid stats-grid--3col">
+        <div class="stat-card stat-card--accent5" data-kpi="alerts">
+          <div class="stat-icon">🔔</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statAlerts">—</div>
+            <div class="stat-label">Alertas generadas</div>
+          </div>
+          <div class="stat-sub" id="statAlertsSub">Sin leer: —</div>
+        </div>
+        <div class="stat-card stat-card--accent6" data-kpi="billing">
+          <div class="stat-icon">💳</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statRevenue">€0</div>
+            <div class="stat-label">Facturación este mes</div>
+          </div>
+          <div class="stat-sub" id="statBillingSub">Pioneros: — · Trials: —</div>
+        </div>
+        <div class="stat-card stat-card--accent7" data-kpi="stripe">
+          <div class="stat-icon">🔄</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statStripeEvents">—</div>
+            <div class="stat-label">Eventos Stripe</div>
+          </div>
+          <div class="stat-sub" id="statStripeSub">Suscripciones: — · Canceladas: —</div>
+        </div>
+      </section>
+
+      <!-- Charts & Activity Row -->
+      <section class="content-row">
+        <!-- Daily Check-ins Chart -->
+        <div class="panel panel--chart">
+          <h2 class="panel-title">Check-ins diarios (14 días)</h2>
+          <div class="chart-container" id="chartContainer">
+            <div class="chart-bars" id="chartBars"></div>
+          </div>
+        </div>
+
+        <!-- Scales Breakdown -->
+        <div class="panel panel--scales">
+          <h2 class="panel-title">Escalas clínicas</h2>
+          <div id="scalesBreakdown" class="scales-breakdown"></div>
+        </div>
+      </section>
+
+      <!-- Recent Activity -->
+      <section class="panel panel--activity">
+        <h2 class="panel-title">Actividad reciente</h2>
+        <div id="activityFeed" class="activity-feed">
+          <div class="activity-loading">Cargando actividad...</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="admin-footer">
+      <span>Coter Pro &copy; 2024–2026</span>
+      <span class="footer-env" id="footerEnv"></span>
+    </footer>
+  </div>
+
+  <script>
+  // ════════ Admin Dashboard JS ════════
+  const API = window.location.origin + '/api/v1/admin';
+  let authToken = sessionStorage.getItem('admin_token');
+
+  // ─── DOM refs ─────────────────────────────────────────────
+  const loginScreen = document.getElementById('loginScreen');
+  const dashboardScreen = document.getElementById('dashboardScreen');
+  const loginForm = document.getElementById('loginForm');
+  const loginBtn = document.getElementById('loginBtn');
+  const loginBtnText = document.getElementById('loginBtnText');
+  const loginSpinner = document.getElementById('loginSpinner');
+  const loginError = document.getElementById('loginError');
+  const adminPassword = document.getElementById('adminPassword');
+  const lastUpdated = document.getElementById('lastUpdated');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+
+  // ─── Auto-login ──────────────────────────────────────────
+  if (authToken) {
+    loginScreen.classList.add('hidden');
+    dashboardScreen.classList.remove('hidden');
+    loadStats();
+    loadActivity();
+  }
+
+  // ─── Login ───────────────────────────────────────────────
+  loginForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const password = adminPassword.value.trim();
+    if (!password) return;
+
+    loginBtn.disabled = true;
+    loginBtnText.classList.add('hidden');
+    loginSpinner.classList.remove('hidden');
+    loginError.classList.add('hidden');
+
+    try {
+      const r = await fetch(API + '/stats', {
+        headers: {
+          'Authorization': 'Bearer ' + password,
+          'x-admin-password': password,
+        },
+      });
+      const d = await r.json();
+
+      if (r.ok && d.success) {
+        authToken = password;
+        sessionStorage.setItem('admin_token', password);
+        loginScreen.classList.add('hidden');
+        dashboardScreen.classList.remove('hidden');
+        renderStats(d.stats);
+        loadActivity();
+      } else {
+        throw new Error(d.error || 'Contraseña incorrecta');
+      }
+    } catch (err) {
+      loginError.textContent = err.message || 'Error de conexión';
+      loginError.classList.remove('hidden');
+    } finally {
+      loginBtn.disabled = false;
+      loginBtnText.classList.remove('hidden');
+      loginSpinner.classList.add('hidden');
+    }
+  });
+
+  // ─── Logout ──────────────────────────────────────────────
+  logoutBtn.addEventListener('click', () => {
+    sessionStorage.removeItem('admin_token');
+    authToken = null;
+    dashboardScreen.classList.add('hidden');
+    loginScreen.classList.remove('hidden');
+    adminPassword.value = '';
+    adminPassword.focus();
+  });
+
+  // ─── Refresh ─────────────────────────────────────────────
+  refreshBtn.addEventListener('click', () => { loadStats(); loadActivity(); });
+
+  // ─── API helpers ─────────────────────────────────────────
+  async function apiFetch(path) {
+    if (!authToken) throw new Error('No autenticado');
+    const r = await fetch(API + path, {
+      headers: {
+        'Authorization': 'Bearer ' + authToken,
+        'x-admin-password': authToken,
+      },
+    });
+    if (r.status === 401) {
+      sessionStorage.removeItem('admin_token');
+      authToken = null;
+      dashboardScreen.classList.add('hidden');
+      loginScreen.classList.remove('hidden');
+      throw new Error('Sesión expirada');
+    }
+    return r.json();
+  }
+
+  // ─── Load stats ──────────────────────────────────────────
+  async function loadStats() {
+    try {
+      const d = await apiFetch('/stats');
+      if (d.success) renderStats(d.stats);
+      document.getElementById('lastUpdated').textContent =
+        'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
+    } catch (err) {
+      console.error('[admin] loadStats:', err);
+    }
+  }
+
+  function renderStats(s) {
+    // Therapists
+    document.getElementById('statTherapists').textContent = s.therapists.total;
+    document.getElementById('statTherapistsSub').textContent =
+      'Activos: ' + s.therapists.active + ' · Este mes: +' + s.therapists.thisMonth;
+
+    // Patients
+    document.getElementById('statPatients').textContent = s.patients.total;
+    document.getElementById('statPatientsSub').textContent =
+      'Conexiones activas: ' + s.patients.activeConnections + ' · Este mes: +' + s.patients.thisMonth;
+
+    // Check-ins
+    document.getElementById('statCheckIns').textContent = s.checkIns.total;
+
+    // Daily chart
+    renderDailyChart(s.checkIns.daily);
+
+    // Scales
+    document.getElementById('statScales').textContent = s.clinicalScales.completedThisWeek;
+    renderScalesBreakdown(s.clinicalScales.breakdown);
+
+    // Alerts
+    document.getElementById('statAlerts').textContent = s.alerts.total;
+    document.getElementById('statAlertsSub').textContent = 'Sin leer: ' + s.alerts.unread;
+
+    // Billing
+    const rev = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(s.billing.revenueThisMonth);
+    document.getElementById('statRevenue').textContent = rev;
+    document.getElementById('statBillingSub').textContent =
+      'Pioneros: ' + (s.billing.pioneers || 0) +
+      ' · Trials: ' + ((s.billing.subscriptions && s.billing.subscriptions.trial) || 0);
+
+    // Stripe
+    const se = s.billing.stripe || {};
+    const totalEvents = (se.paid_invoices || 0) + (se.completed_checkouts || 0) + (se.subscriptions_created || 0) + (se.subscriptions_cancelled || 0);
+    document.getElementById('statStripeEvents').textContent = totalEvents;
+    document.getElementById('statStripeSub').textContent =
+      'Creadas: ' + (se.subscriptions_created || 0) +
+      ' · Canceladas: ' + (se.subscriptions_cancelled || 0);
+  }
+
+  // ─── Daily chart ─────────────────────────────────────────
+  function renderDailyChart(daily) {
+    const container = document.getElementById('chartBars');
+    if (!daily || daily.length === 0) {
+      container.innerHTML = '<div class="chart-empty">Sin datos de check-ins</div>';
+      return;
+    }
+
+    const maxVal = Math.max(...daily.map(d => d.count), 1);
+    const days = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const found = daily.find(x => x.day === key);
+      days.push({ day: key, count: found ? found.count : 0, label: d.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric' }) });
+    }
+
+    container.innerHTML = days.map(d => {
+      const h = Math.max((d.count / maxVal) * 100, d.count > 0 ? 4 : 0);
+      const cls = d.count === 0 ? 'bar-zero' : d.count >= maxVal * 0.8 ? 'bar-peak' : 'bar-normal';
+      return '<div class="chart-bar-col">' +
+        '<div class="chart-bar-value">' + (d.count || '') + '</div>' +
+        '<div class="chart-bar ' + cls + '" style="height:' + h + '%" title="' + d.day + ': ' + d.count + ' check-ins"></div>' +
+        '<div class="chart-bar-label">' + d.label.split(' ')[0] + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  // ─── Scales breakdown ────────────────────────────────────
+  function renderScalesBreakdown(breakdown) {
+    const container = document.getElementById('scalesBreakdown');
+    if (!breakdown || breakdown.length === 0) {
+      container.innerHTML = '<div class="scales-empty">Sin escalas completadas</div>';
+      return;
+    }
+
+    const names = { phq9: 'PHQ-9', gad7: 'GAD-7', bdiii: 'BDI-II' };
+    const maxTotal = Math.max(...breakdown.map(b => b.total), 1);
+
+    container.innerHTML = breakdown.map(b => {
+      const pct = maxTotal > 0 ? Math.round((b.total / maxTotal) * 100) : 0;
+      const name = names[b.exercise_kind] || b.exercise_kind;
+      return '<div class="scale-item">' +
+        '<div class="scale-item-header">' +
+          '<span class="scale-item-name">' + name + '</span>' +
+          '<span class="scale-item-count">' + b.completed + '/' + b.total + '</span>' +
+        '</div>' +
+        '<div class="scale-item-bar-bg"><div class="scale-item-bar" style="width:' + pct + '%"></div></div>' +
+      '</div>';
+    }).join('');
+  }
+
+  // ─── Load activity ───────────────────────────────────────
+  async function loadActivity() {
+    const feed = document.getElementById('activityFeed');
+    try {
+      const d = await apiFetch('/recent-activity?limit=20');
+      if (!d.success) throw new Error(d.error);
+
+      const icons = {
+        therapist_registered: '🧑‍⚕️',
+        patient_connected: '🔗',
+        scale_completed: '📋',
+        alert_triggered: '🔔',
+        stripe_event: '💳',
+      };
+      const labels = {
+        therapist_registered: 'Terapeuta registrado',
+        patient_connected: 'Paciente conectado',
+        scale_completed: 'Escala completada',
+        alert_triggered: 'Alerta disparada',
+        stripe_event: 'Evento Stripe',
+      };
+
+      feed.innerHTML = d.activity.map(a => {
+        const timeAgo = getTimeAgo(new Date(a.created_at));
+        return '<div class="activity-item">' +
+          '<div class="activity-icon">' + (icons[a.type] || '📌') + '</div>' +
+          '<div class="activity-content">' +
+            '<div class="activity-type">' + (labels[a.type] || a.type) + '</div>' +
+            '<div class="activity-detail">' +
+              '<strong>' + escapeHtml(a.label) + '</strong>' +
+              (a.detail ? ' · ' + escapeHtml(a.detail) : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="activity-time">' + timeAgo + '</div>' +
+        '</div>';
+      }).join('');
+    } catch (err) {
+      feed.innerHTML = '<div class="activity-error">Error al cargar actividad</div>';
+    }
+  }
+
+  function getTimeAgo(date) {
+    const secs = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (secs < 60) return 'ahora';
+    if (secs < 3600) return Math.floor(secs / 60) + ' min';
+    if (secs < 86400) return Math.floor(secs / 3600) + ' h';
+    if (secs < 604800) return Math.floor(secs / 86400) + ' d';
+    return date.toLocaleDateString('es-ES');
+  }
+
+  function escapeHtml(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ─── Footer env ──────────────────────────────────────────
+  (async () => {
+    try {
+      const r = await fetch('/api/health');
+      const d = await r.json();
+      document.getElementById('footerEnv').textContent = 'Env: ' + (d.environment || '?');
+    } catch (e) { document.getElementById('footerEnv').textContent = 'Env: ?'; }
+  })();
+  </script>
+</body>
+</html>

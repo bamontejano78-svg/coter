@@ -3,9 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Coter – Tu compañero terapéutico</title>
+<meta name="description" content="Coter — Tu compañero terapéutico digital. Conéctate con tu terapeuta, registra check-ins, completa tareas y sigue tu progreso.">
+<title>Coter — Tu compañero terapéutico</title>
+<meta property="og:title" content="Coter — Tu compañero terapéutico">
+<meta property="og:description" content="Conéctate con tu terapeuta, registra check-ins emocionales, completa tareas y sigue tu progreso entre sesiones.">
+<meta property="og:image" content="https://coter.app/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+<meta property="og:url" content="https://coter.app/paciente.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Coter Pro">
+<meta property="og:locale" content="es_ES">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Coter — Tu compañero terapéutico">
+<meta name="twitter:description" content="App de paciente: check-ins, tareas y comunicación segura con tu terapeuta.">
+<meta name="twitter:image" content="https://coter.app/og-image.png">
 <script src="/lib/sweetalert2.all.min.js?v=3"></script>
 <script src="/lib/chart.umd.min.js?v=3"></script>
+<script src="/js/shared-ui.js?v=3"></script>
 <script src="/js/exercise-forms.js?v=3"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,8 +33,16 @@
 <div class="container">
 
 <div class="card connect-screen" id="connectScreen">
-<h1>Coter</h1>
-<p style="font-size:1rem;color:var(--muted);margin:12px 0 28px">Tu compañero terapéutico digital</p>
+<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:8px">
+<div style="width:40px;height:40px;border-radius:8px;background:linear-gradient(135deg,var(--p),var(--p-light));display:inline-flex;align-items:center;justify-content:center;color:#fff;box-shadow:0 3px 12px rgba(79,70,229,.3)">
+<svg width="22" height="22" viewBox="0 0 24 24" focusable="false">
+<path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+</svg>
+</div>
+<h1 style="margin:0;font-size:28px">Coter</h1>
+</div>
+<p style="font-size:1rem;color:var(--muted);margin:8px 0 28px">Tu compañero terapéutico digital</p>
+<label for="codeInput" class="sr-only">Código de acceso (formato TH- seguido de 6 caracteres)</label>
 <input type="text" class="code-input" id="codeInput" placeholder="TH-ABC123" maxlength="9" autocomplete="off" size="9" pattern="TH-[A-Z0-9]{6}" title="Formato: TH- seguido de 6 caracteres (A-Z y 0-9)">
 <button class="btn btn-p" data-action="connect">Conectar con mi terapeuta</button>
 <p style="margin-top:24px;font-size:.9rem;opacity:.7">Pide el código de acceso a tu terapeuta</p>
@@ -27,10 +50,10 @@
 
 <div class="hidden" id="mainScreen">
 <div class="therapist-info" style="position:relative">
-<div class="therapist-name" id="therapistName">Cargando...</div>
+<div class="therapist-name" id="therapistName"><div class="skeleton skeleton-text short" style="margin:0 auto"></div></div>
 <div style="font-size:.85rem;color:var(--muted);margin-top:4px">Tu terapeuta está contigo</div>
 <div style="display:flex;justify-content:flex-end;margin-top:12px">
-<div class="notif-bar" data-action="toggle-notifications" aria-label="Notificaciones" title="Notificaciones">
+<div class="notif-bar" data-action="toggle-notifications" aria-label="Notificaciones" title="Notificaciones" aria-expanded="false" aria-controls="notifPanel">
 <span class="notif-bell" aria-hidden="true">◐</span>
 <span class="notif-badge hidden" id="notifBadge">0</span>
 </div>
@@ -41,10 +64,7 @@
 <div class="notif-header">
 <h2>Notificaciones</h2>
 <button class="btn btn-p" style="width:auto;padding:5px 12px;font-size:12px" data-action="mark-all-read">Marcar leídas</button>
-</div>
-<div class="notif-list" id="notifList">
-<div class="notif-empty">Cargando...</div>
-</div>
+</div><div class="notif-list" id="notifList"><div class="skel-row"><div class="skeleton skeleton-circle"></div><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div><div class="skel-row"><div class="skeleton skeleton-circle"></div><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text xshort"></div></div></div></div>
 </div>
 
 <div class="stats-grid">
@@ -61,7 +81,7 @@
 <div class="progress-badge"><div class="progress-badge-value">—</div><div class="progress-badge-label">Tareas</div></div>
 <div class="progress-badge"><div class="progress-badge-value">—</div><div class="progress-badge-label">Objetivos</div></div>
 </div>
-<div class="progress-weekly" id="progressWeekly">Cargando tendencias...</div>
+<div class="progress-weekly" id="progressWeekly"><div class="chart-skeleton"><div class="chart-bar-skel skeleton"></div><div class="chart-bar-skel skeleton"></div><div class="chart-bar-skel skeleton"></div><div class="chart-bar-skel skeleton"></div><div class="chart-bar-skel skeleton"></div></div></div>
 <div id="progressNote" class="hidden"></div>
 <div class="progress-timeline" id="progressTimeline"></div>
 </div>
@@ -69,17 +89,18 @@
 <div class="card">
 <h2>¿Cómo te sientes hoy?</h2>
 <div class="slider-container">
-<div class="slider-label"><span>Ánimo</span><span class="slider-value" id="moodVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="mood" data-slider="mood">
+<label for="mood" class="slider-label"><span>Ánimo</span><span class="slider-value" id="moodVal">5</span></label>
+<input type="range" min="1" max="10" value="5" id="mood" data-slider="mood" aria-valuemin="1" aria-valuemax="10" aria-valuenow="5" aria-label="Ánimo: ¿Cómo te sientes del 1 al 10?">
 </div>
 <div class="slider-container">
-<div class="slider-label"><span>Ansiedad</span><span class="slider-value" id="anxietyVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="anxiety" data-slider="anxiety">
+<label for="anxiety" class="slider-label"><span>Ansiedad</span><span class="slider-value" id="anxietyVal">5</span></label>
+<input type="range" min="1" max="10" value="5" id="anxiety" data-slider="anxiety" aria-valuemin="1" aria-valuemax="10" aria-valuenow="5" aria-label="Ansiedad: nivel del 1 al 10">
 </div>
 <div class="slider-container">
-<div class="slider-label"><span>Energía</span><span class="slider-value" id="energyVal">5</span></div>
-<input type="range" min="1" max="10" value="5" id="energy" data-slider="energy">
+<label for="energy" class="slider-label"><span>Energía</span><span class="slider-value" id="energyVal">5</span></label>
+<input type="range" min="1" max="10" value="5" id="energy" data-slider="energy" aria-valuemin="1" aria-valuemax="10" aria-valuenow="5" aria-label="Energía: nivel del 1 al 10">
 </div>
+<label for="thoughts" class="sr-only">Reflexiones para tu terapeuta</label>
 <textarea id="thoughts" placeholder="¿Quieres contarle algo especial a tu terapeuta hoy?"></textarea>
 <button class="btn btn-s" data-action="send-checkin">Enviar check-in</button>
 </div>
@@ -91,8 +112,9 @@
 
 <div class="card">
 <h2>Chat con tu terapeuta</h2>
-<div class="chat-box" id="chatBox">Conectando...</div>
+<div class="chat-box" id="chatBox" role="log" aria-live="polite" aria-label="Chat con tu terapeuta"><div class="skeleton skeleton-chat left"></div><div class="skeleton skeleton-chat right"></div><div class="skeleton skeleton-chat left" style="width:65%"></div></div>
 <div class="chat-input">
+<label for="msgInput" class="sr-only">Escribe un mensaje para tu terapeuta</label>
 <input type="text" id="msgInput" placeholder="Escribe un mensaje..." >
 <button class="btn btn-p" data-action="send-message" style="width:auto;padding:14px 24px">Enviar</button>
 </div>
@@ -100,12 +122,12 @@
 
 <div class="card">
 <h2>Mis tareas</h2>
-<div id="tasksList">Cargando...</div>
+<div id="tasksList"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card" style="margin-top:10px"></div><div class="skeleton skeleton-card" style="margin-top:10px"></div></div>
 </div>
 
 <div class="card">
 <h2>Mis objetivos</h2>
-<div id="goalsList">Cargando...</div>
+<div id="goalsList"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card" style="margin-top:10px"></div></div>
 </div>
 
 <div class="card">

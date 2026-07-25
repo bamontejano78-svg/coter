@@ -3,9 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Coter Pro – Terapeuta</title>
+<meta name="description" content="Coter Pro — Panel del terapeuta. Gestiona pacientes, asigna tareas, revisa check-ins, escalas clínicas y notas desde un solo lugar.">
+<title>Coter Pro — Terapeuta</title>
+<meta property="og:title" content="Coter Pro — Panel del terapeuta">
+<meta property="og:description" content="Gestiona pacientes, revisa check-ins emocionales, asigna tareas terapéuticas y consulta escalas clínicas desde un panel unificado.">
+<meta property="og:image" content="https://coter.app/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+<meta property="og:url" content="https://coter.app/terapeuta.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Coter Pro">
+<meta property="og:locale" content="es_ES">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Coter Pro — Panel del terapeuta">
+<meta name="twitter:description" content="Panel profesional para seguimiento terapéutico: pacientes, check-ins, tareas y escalas clínicas.">
+<meta name="twitter:image" content="https://coter.app/og-image.png">
 <script src="/lib/sweetalert2.all.min.js?v=3"></script>
 <script src="/lib/chart.umd.min.js?v=3"></script>
+<script src="/js/shared-ui.js?v=3"></script>
 <script src="/js/patients-cache.js?v=3"></script>
 <script src="/js/exercise-forms.js?v=3"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -18,47 +33,74 @@
 
 <div id="loginScreen" class="login-screen">
 <div class="login-card">
-<h1>Coter Pro</h1>
-<p style="color:var(--muted);font-size:13px;margin-bottom:20px">Panel del terapeuta</p>
-<input type="email" id="loginEmail" placeholder="Email" value="ana@coter.com">
-<input type="password" id="loginPassword" placeholder="Contraseña" value="123456">
+<div class="login-logo">
+<div class="login-logo-mark">
+<svg width="22" height="22" viewBox="0 0 24 24" focusable="false">
+<path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+</svg>
+</div>
+<span class="login-logo-text">Coter Pro</span>
+</div>
+<p style="color:var(--muted);font-size:13px;margin-bottom:24px">Panel del terapeuta</p>
+<label for="loginEmail" class="sr-only">Correo electrónico</label>
+<input type="email" id="loginEmail" placeholder="Email" value="ana@coter.com" autocomplete="email">
+<label for="loginPassword" class="sr-only">Contraseña</label>
+<input type="password" id="loginPassword" placeholder="Contraseña" value="123456" autocomplete="current-password">
 <button data-action="login">Iniciar sesión</button>
-<p style="margin-top:16px;font-size:.85rem;color:#888">¿No tienes cuenta? <a href="#" data-action="show-register" class="link-accent">Regístrate</a></p>
-<p style="margin-top:6px;font-size:.85rem;color:#888"><a href="/reset-password.html" class="link-accent">¿Olvidaste tu contraseña?</a></p>
+<p style="margin-top:18px;font-size:.85rem;color:var(--muted)">¿No tienes cuenta? <a href="#" data-action="show-register" class="link-accent">Regístrate</a></p>
+<p style="margin-top:6px;font-size:.85rem;color:var(--muted)"><a href="/reset-password.html" class="link-accent">¿Olvidaste tu contraseña?</a></p>
 </div>
 </div>
 
 <div id="registerScreen" class="login-screen hidden">
 <div class="login-card">
-<h1>Coter Pro</h1>
-<p style="color:var(--muted);font-size:13px;margin-bottom:20px">Registro de terapeuta</p>
-<input type="text" id="regName" placeholder="Nombre completo">
-<input type="email" id="regEmail" placeholder="Email">
-<input type="text" id="regSpecialty" placeholder="Especialidad (ej: Psicología clínica)">
-<input type="password" id="regPassword" placeholder="Contraseña (mín. 6 caracteres)">
+<div class="login-logo">
+<div class="login-logo-mark">
+<svg width="22" height="22" viewBox="0 0 24 24" focusable="false">
+<path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+</svg>
+</div>
+<span class="login-logo-text">Coter Pro</span>
+</div>
+<p style="color:var(--muted);font-size:13px;margin-bottom:24px">Registro de terapeuta</p>
+<label for="regName" class="sr-only">Nombre completo</label>
+<input type="text" id="regName" placeholder="Nombre completo" autocomplete="name">
+<label for="regEmail" class="sr-only">Correo electrónico</label>
+<input type="email" id="regEmail" placeholder="Email" autocomplete="email">
+<label for="regSpecialty" class="sr-only">Especialidad</label>
+<input type="text" id="regSpecialty" placeholder="Especialidad (ej: Psicología clínica)" autocomplete="organization-title">
+<label for="regPassword" class="sr-only">Contraseña (mínimo 6 caracteres)</label>
+<input type="password" id="regPassword" placeholder="Contraseña (mín. 6 caracteres)" autocomplete="new-password">
 <button data-action="register">Crear cuenta</button>
 <button class="btn-secondary" data-action="show-login">Volver al login</button>
 </div>
 </div>
 
 <div id="appScreen" class="hidden">
-<div class="sidebar">
+<button class="mobile-nav-toggle" data-action="toggle-sidebar" aria-label="Abrir menú">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+</svg>
+</button>
+<div class="sidebar-backdrop" data-action="close-sidebar"></div>
+<div class="sidebar" id="sidebar" role="navigation" aria-label="Navegación principal">
 <div class="logo">
   <svg class="logo-icon" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
     <path d="M 20 7.5 A 9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
   </svg>
   <span>Coter Pro</span>
 </div>
-<div class="nav-item active" data-tab="dashboard">Dashboard</div>
+<div class="nav-item active" data-tab="dashboard" aria-current="page">Dashboard</div>
 <div class="nav-item" data-tab="patients">Pacientes</div>
 <div class="nav-item" data-tab="code">Código de acceso</div>
 <div class="nav-item" data-tab="calendar">Calendario</div>
 <div class="nav-item" data-tab="library">Biblioteca TCC</div>
+<div class="nav-item" data-tab="billing">Facturación</div>
 <div class="nav-bottom"><button class="btn btn-d" style="width:100%" data-action="logout">Cerrar sesión</button></div>
 </div>
 <div class="main">
 <div id="tab-dashboard" class="tab-content active">
-<h1>Dashboard <span style="font-size:1rem;font-weight:400;color:#888" id="therapistName"></span></h1>
+<h1>Dashboard <span style="font-size:1rem;font-weight:400;color:#888" id="therapistName"></span><span id="alertsBadge" class="alerts-badge hidden">0</span></h1>
 <div class="stats-grid">
 <div class="stat-card"><div class="stat-num" id="statPatients">-</div><div class="stat-label">Pacientes activos</div></div>
 <div class="stat-card"><div class="stat-num" id="statCheckins">-</div><div class="stat-label">Check-ins hoy</div></div>
@@ -66,13 +108,14 @@
 <div class="stat-card"><div class="stat-num" id="statRisk" style="color:var(--d)">-</div><div class="stat-label">En riesgo</div></div>
 </div>
 <div class="card"><h2>Tendencia semanal</h2><canvas id="trendChart" height="80"></canvas></div>
-<div class="card"><h2>Actividad reciente</h2><div id="recentActivity">Cargando...</div></div>
+<div class="card"><h2>Actividad reciente</h2><div id="recentActivity"><div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text xshort"></div></div></div><div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div><div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text" style="width:75%"></div><div class="skeleton skeleton-text xshort"></div></div></div></div></div>
+<div class="card" id="alertsPanel" style="display:none"><h2>🔔 Alertas clínicas <button class="btn btn-sm btn-d" data-action="dismiss-alerts" style="float:right">Marcar todas leídas</button></h2><div id="alertsList"></div></div>
 </div>
 
 <div id="tab-patients" class="tab-content">
 <h1>Pacientes <button class="btn btn-p" data-action="refresh-patients">Actualizar</button></h1>
 <div class="card"><table><thead><tr><th>Paciente</th><th>Conectado</th><th>Último check-in</th><th>Ánimo</th><th>Estado</th><th>Acción</th></tr></thead>
-<tbody id="patientsTableBody"><tr><td colspan="6" style="text-align:center;padding:40px">Cargando...</td></tr></tbody></table></div>
+<tbody id="patientsTableBody"><tr><td colspan="6"><div class="skeleton skeleton-table-row"></div></td></tr><tr><td colspan="6"><div class="skeleton skeleton-table-row"></div></td></tr><tr><td colspan="6"><div class="skeleton skeleton-table-row" style="width:90%"></div></td></tr></tbody></table></div>
 </div>
 
 <div id="tab-calendar" class="tab-content">
@@ -86,7 +129,7 @@
 <button data-action="next-month">▶</button>
 <button style="background:var(--s);margin-left:8px" data-action="go-today">Hoy</button>
 </div>
-<div class="calendar-grid" id="calendarGrid">Cargando...</div>
+<div class="calendar-grid" id="calendarGrid"><div class="skeleton skeleton-calendar" style="grid-column:1/-1"></div></div>
 <div class="calendar-day-panel hidden" id="calendarDayPanel">
 <h3 id="calendarDayTitle"></h3>
 <div id="calendarDayContent"></div>
@@ -96,11 +139,11 @@
 <div class="calendar-side-col">
 <div class="card agenda-card">
 <h2>Agenda de hoy</h2>
-<div id="agendaToday">Cargando...</div>
+<div id="agendaToday"><div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div></div>
 </div>
 <div class="card agenda-card">
 <h2>Próximos 7 días</h2>
-<div id="agendaUpcoming">Cargando...</div>
+<div id="agendaUpcoming"><div class="skel-row"><div class="skeleton skeleton-text short"></div></div><div class="skel-row"><div class="skeleton skeleton-text" style="width:60%"></div></div></div>
 </div>
 </div>
 </div>
@@ -109,9 +152,17 @@
 <div id="tab-library" class="tab-content">
 <h1>Biblioteca de tareas TCC <button class="btn btn-w" data-action="create-template" style="font-size:13px">Crear plantilla</button></h1>
 <div class="card">
+<label for="librarySearch" class="sr-only">Buscar tarea por título o descripción</label>
 <input type="text" class="library-search" id="librarySearch" placeholder="Buscar tarea por título o descripción..." oninput="renderTemplates()">
 <div class="category-filter" id="categoryFilter"></div>
-<div class="library-grid" id="libraryGrid">Cargando biblioteca...</div>
+<div class="library-grid" id="libraryGrid"><div class="skeleton skeleton-library-card"></div><div class="skeleton skeleton-library-card"></div><div class="skeleton skeleton-library-card" style="width:95%"></div></div>
+</div>
+</div>
+
+<div id="tab-billing" class="tab-content">
+<h1>Facturación <button class="btn btn-p" data-action="refresh-billing" style="font-size:13px">Actualizar</button></h1>
+<div class="billing-grid" id="billingContent">
+<div class="card" style="grid-column:1/-1"><div style="text-align:center;padding:32px"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div>
 </div>
 </div>
 
@@ -119,7 +170,7 @@
 <h1>Código de acceso</h1>
 <div class="card" style="max-width:600px;margin:40px auto;text-align:center">
 <h2>Código activo para pacientes</h2>
-<div class="code-box" id="currentCode">Cargando...</div>
+<div class="code-box" id="currentCode"><div class="skeleton skeleton-code-box"></div></div>
 <div style="display:flex;gap:12px;justify-content:center;margin-top:20px">
 <button class="btn btn-s" style="padding:11px 24px;font-size:14px" data-action="gen-code">Generar código genérico</button>
 <button class="btn btn-p" style="padding:11px 24px;font-size:14px" data-action="new-patient">Nuevo paciente</button>
@@ -140,31 +191,36 @@
 <button class="btn btn-d btn-sm" data-action="close-modal">Cerrar</button>
 </div>
 </div>
-<div class="modal-tabs">
-<div class="modal-tab active" data-ptab="ptab-chat">Chat</div>
-<div class="modal-tab" data-ptab="ptab-checkins">Check-ins</div>
-<div class="modal-tab" data-ptab="ptab-tasks">Tareas</div>
-<div class="modal-tab" data-ptab="ptab-goals">Objetivos</div>
-<div class="modal-tab" data-ptab="ptab-notes">Notas clínicas</div>
+<div class="modal-tabs" role="tablist" aria-label="Pestañas del paciente">
+<button class="modal-tab active" data-ptab="ptab-chat" role="tab" aria-selected="true" aria-controls="ptab-chat" id="mtab-chat">Chat</button>
+<button class="modal-tab" data-ptab="ptab-checkins" role="tab" aria-selected="false" aria-controls="ptab-checkins" id="mtab-checkins">Check-ins</button>
+<button class="modal-tab" data-ptab="ptab-tasks" role="tab" aria-selected="false" aria-controls="ptab-tasks" id="mtab-tasks">Tareas</button>
+<button class="modal-tab" data-ptab="ptab-goals" role="tab" aria-selected="false" aria-controls="ptab-goals" id="mtab-goals">Objetivos</button>
+<button class="modal-tab" data-ptab="ptab-presession" role="tab" aria-selected="false" aria-controls="ptab-presession" id="mtab-presession">🧠 Pre-sesión</button>
+<button class="modal-tab" data-ptab="ptab-insights" role="tab" aria-selected="false" aria-controls="ptab-insights" id="mtab-insights">📊 Insights</button>
+<button class="modal-tab" data-ptab="ptab-notes" role="tab" aria-selected="false" aria-controls="ptab-notes" id="mtab-notes">Notas clínicas</button>
 </div>
 <div class="modal-body">
-<div id="ptab-chat" class="modal-tab-content active">
-<div class="chat-box" id="patientChat"></div>
+<div id="ptab-presession" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-presession"><div id="patientPreSession"><div class="empty-msg">Selecciona un paciente para ver la memoria pre-sesión</div></div></div>
+<div id="ptab-insights" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-insights"><div id="patientInsights"><div class="empty-msg">Selecciona un paciente para ver sus insights semanales</div></div></div>
+<div id="ptab-chat" class="modal-tab-content active" role="tabpanel" aria-labelledby="mtab-chat">
+<div class="chat-box" id="patientChat" role="log" aria-live="polite" aria-label="Chat con el paciente"><div class="skeleton skeleton-chat left"></div><div class="skeleton skeleton-chat right"></div><div class="skeleton skeleton-chat left" style="width:60%"></div></div>
 <div class="chat-input">
+<label for="chatMsgInput" class="sr-only">Escribe un mensaje para el paciente</label>
 <input type="text" id="chatMsgInput" placeholder="Escribe un mensaje..." onkeypress="if(event.key==='Enter')sendTherapistMsg()">
 <button class="btn btn-p" data-action="send-msg">Enviar</button>
 </div>
 </div>
-<div id="ptab-checkins" class="modal-tab-content"><div id="patientCheckins">Cargando...</div></div>
-<div id="ptab-tasks" class="modal-tab-content">
+<div id="ptab-checkins" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-checkins"><div id="patientCheckins">Cargando...</div></div>
+<div id="ptab-tasks" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-tasks">
 <button class="btn btn-s" style="margin-bottom:16px" data-action="add-task">+ Nueva tarea</button>
 <div id="patientTasks">Cargando...</div>
 </div>
-<div id="ptab-goals" class="modal-tab-content">
+<div id="ptab-goals" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-goals">
 <button class="btn btn-s" style="margin-bottom:16px" data-action="add-goal">+ Nuevo objetivo</button>
 <div id="patientGoals">Cargando...</div>
 </div>
-<div id="ptab-notes" class="modal-tab-content">
+<div id="ptab-notes" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-notes">
 <button class="btn btn-s" style="margin-bottom:16px" data-action="add-note">+ Nueva nota SOAP</button>
 <div id="patientNotes">Cargando...</div>
 </div>
@@ -173,5 +229,7 @@
 </div>
 
 <script src="/js/therapist.js?v=3"></script>
+<script src="/js/therapist-presession.js?v=1"></script>
+<script src="/js/therapist-alerts.js?v=1"></script>
 </body>
 </html>

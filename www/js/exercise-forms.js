@@ -461,10 +461,9 @@
   }
 
   function fetchHeaders(opts) {
-    return {
-      'Content-Type': 'application/json',
-      Authorization: 'Bearer ' + (opts.authToken || '')
-    };
+    var headers = { 'Content-Type': 'application/json' };
+    if (opts.authToken) headers.Authorization = 'Bearer ' + opts.authToken;
+    return headers;
   }
 
   // stripBanners: deduplica .ex-error-banner y .ex-field-error dentro del
@@ -488,6 +487,7 @@
         if (!st.sid) {
           var startRes = await fetch(st.opts.apiBase + '/patients/' + st.opts.patientId + '/sessions/start', {
             method: 'POST',
+            credentials: 'include',
             headers: fetchHeaders(st.opts),
             body: JSON.stringify({ assignment_id: st.aid }),
           });
@@ -501,6 +501,7 @@
         }
         var putRes = await fetch(st.opts.apiBase + '/patients/' + st.opts.patientId + '/sessions/' + st.sid, {
           method: 'PUT',
+          credentials: 'include',
           headers: fetchHeaders(st.opts),
           body: JSON.stringify({ responses: st.responses }),
         });
@@ -531,6 +532,7 @@
       if (!st.sid) {
         var startRes = await fetch(st.opts.apiBase + '/patients/' + st.opts.patientId + '/sessions/start', {
           method: 'POST',
+          credentials: 'include',
           headers: fetchHeaders(st.opts),
           body: JSON.stringify({ assignment_id: aid }),
         });
@@ -545,6 +547,7 @@
       }
       var r = await fetch(st.opts.apiBase + '/patients/' + st.opts.patientId + '/sessions/' + st.sid + '/complete', {
         method: 'POST',
+        credentials: 'include',
         headers: fetchHeaders(st.opts),
         body: JSON.stringify({}),
       });

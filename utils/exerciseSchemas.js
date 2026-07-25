@@ -36,7 +36,7 @@
 // assignments y exercise_sessions. Si añades uno nuevo, actualiza:
 //   1. migrations/007_embedded_exercises.sql → CHECK (kind IN (...))
 //   2. aqui → KINDS + SCHEMAS_BY_KIND key.
-const KINDS = Object.freeze(['classic', 'thought_record', 'behavioral_activation', 'graded_exposure']);
+const KINDS = Object.freeze(['classic', 'thought_record', 'behavioral_activation', 'graded_exposure', 'phq9', 'gad7', 'bdiii']);
 
 const SCHEMA_VERSION = 1;
 
@@ -443,10 +443,6 @@ function deepFreeze(value) {
 function getSchema(kind, dbSchema, opts) {
   if (!kind || kind === 'classic') return null;
   if (dbSchema && Array.isArray(dbSchema.fields) && dbSchema.fields.length > 0) {
-    // Deep-clone via JSON para no compartir referencia con el caller.
-    // exercises_schema es JSONB serializable de PostgreSQL → siempre JSON.
-    // Tras clonar, congelamos recursivamente para que mutaciones internas
-    // (distortion_catalog[], hierarchy[], fields[]) también reboten.
     const cloned = JSON.parse(JSON.stringify(dbSchema));
     return deepFreeze(cloned);
   }
@@ -458,6 +454,15 @@ function getSchema(kind, dbSchema, opts) {
   if (kind === 'graded_exposure') {
     const phobia = (opts && opts.phobia) || 'agoraphobia';
     return GRADED_EXPOSURE_SCHEMAS[phobia] || GE_AGORAPHOBIA_SCHEMA;
+  }
+  // Clinical scales (phq9, gad7, bdiii) — lazy require to avoid circular deps
+  if (['phq9', 'gad7', 'bdiii'].includes(kind)) {
+    try {
+      const { CLINICAL_SCALES } = require('./clinicalScales');
+      return (CLINICAL_SCALES && CLINICAL_SCALES[kind]) || null;
+    } catch (e) {
+      return null;
+    }
   }
   return null;
 }

@@ -1,3 +1,5 @@
+process.env.ENCRYPTION_KEY = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+
 const { encrypt, decrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
 
 describe('Encryption', () => {

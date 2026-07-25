@@ -28,7 +28,10 @@ services:
       - coter-staging
 
   # ─── API ───────────────────────────────────────────────
+  #   $API_IMAGE: cuando se define (desde CI/CD), usa la imagen pre-build de GHCR.
+  #   Si no se define, hace build local desde el Dockerfile.
   api:
+    image: ${API_IMAGE:-}
     build:
       context: .
       dockerfile: Dockerfile

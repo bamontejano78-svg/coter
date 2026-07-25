@@ -1,0 +1,13 @@
+# Coter Pro — robots.txt
+# https://coter.app
+
+User-agent: *
+
+# Proteger rutas sensibles del escaneo público
+Disallow: /admin.html
+Disallow: /terapeuta.html
+Disallow: /paciente.html
+Disallow: /reset-password.html
+Disallow: /api/
+
+Sitemap: https://coter.app/sitemap.xml

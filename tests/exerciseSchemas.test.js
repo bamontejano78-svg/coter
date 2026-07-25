@@ -51,9 +51,17 @@ function makeCompleteTR() {
 }
 
 describe('KINDS enum', () => {
-  test('contains exactly the four documented kinds', () => {
-    expect(new Set(KINDS)).toEqual(new Set(['classic', 'thought_record', 'behavioral_activation', 'graded_exposure']));
-    expect(KINDS.length).toBe(4);
+  test('contains exactly the documented assignment kinds', () => {
+    expect(new Set(KINDS)).toEqual(new Set([
+      'classic',
+      'thought_record',
+      'behavioral_activation',
+      'graded_exposure',
+      'phq9',
+      'gad7',
+      'bdiii',
+    ]));
+    expect(KINDS.length).toBe(7);
   });
 
   test('the KINDS array itself is frozen', () => {

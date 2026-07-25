@@ -2,14 +2,22 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/env');
 const logger = require('../config/logger');
 const { getPool } = require('../database');
+const { COOKIE_NAMES, getCookie } = require('../utils/cookies');
+
+function bearerToken(req) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.slice('Bearer '.length).trim();
+  if (!token || token === 'null' || token === 'undefined') return null;
+  return token;
+}
 
 const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const token = bearerToken(req) || getCookie(req, COOKIE_NAMES.therapistAccess);
+  if (!token) {
     return res.status(401).json({ success: false, error: 'Token requerido' });
   }
 
-  const token = authHeader.split(' ')[1];
   jwt.verify(token, config.JWT_SECRET, (err, user) => {
     if (err) {
       logger.warn('Token invalido', { error: err.message });
@@ -23,16 +31,14 @@ const authenticateToken = (req, res, next) => {
 // Autenticación para pacientes (token simple guardado en BD)
 const authenticatePatient = async (req, res, next) => {
   const { patientId } = req.params;
-  const authHeader = req.headers['authorization'];
-
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, error: 'Token requerido' });
-  }
-
-  const token = authHeader.split(' ')[1];
+  const token = bearerToken(req) || getCookie(req, COOKIE_NAMES.patientAuth);
 
   if (!patientId) {
     return res.status(400).json({ success: false, error: 'ID de paciente requerido' });
+  }
+
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Token requerido' });
   }
 
   try {

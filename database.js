@@ -30,7 +30,7 @@ function createPool() {
     min: config.DB_POOL_MIN,
     max: config.DB_POOL_MAX,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 15000,
+    connectionTimeoutMillis: config.DB_CONNECTION_TIMEOUT_MS,
     ssl: config.DATABASE_URL.includes('neon.tech') ? { rejectUnauthorized: false } : undefined,
   });
 
@@ -170,12 +170,12 @@ async function seedTaskTemplates() {
     const params = [];
     const phs = [];
     batch.forEach((t, idx) => {
-      const b = idx * 6 + 1;
-      params.push(uuidv4(), t.category, t.title, t.instructions, t.difficulty, t.duration_min);
-      phs.push('($' + b + ', NULL, $' + (b + 1) + ', $' + (b + 2) + ', $' + (b + 3) + ', $' + (b + 4) + ', $' + (b + 5) + ')');
+      const b = idx * 7 + 1;
+      params.push(uuidv4(), t.category, t.title, t.instructions, t.difficulty, t.duration_min, t.exercise_kind || 'classic');
+      phs.push('($' + b + ', NULL, $' + (b + 1) + ', $' + (b + 2) + ', $' + (b + 3) + ', $' + (b + 4) + ', $' + (b + 5) + ', $' + (b + 6) + ')');
     });
     await p.query(
-      'INSERT INTO task_templates (id, therapist_id, category, title, instructions, difficulty, duration_min) VALUES ' + phs.join(', ') + ' ON CONFLICT DO NOTHING',
+      'INSERT INTO task_templates (id, therapist_id, category, title, instructions, difficulty, duration_min, exercise_kind) VALUES ' + phs.join(', ') + ' ON CONFLICT DO NOTHING',
       params
     );
   }
@@ -210,6 +210,7 @@ async function closeDatabase() {
     await pool.end();
     pool = null;
   }
+  initialized = false;
 }
 
 module.exports = { initializeDatabase, closeDatabase, getPool };

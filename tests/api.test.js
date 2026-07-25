@@ -2,6 +2,7 @@
 // Ejecutar: npm test
 
 const request = require('supertest');
+const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
 const bus = require('../utils/eventBus');
 
@@ -868,7 +869,18 @@ describe('DELETE /api/v1/therapists/patients/:id/connections (soft disconnect)',
       'SELECT id FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2',
       [tId, pId]
     );
-    linkId = rows[0].id;
+    if (rows.length > 0) {
+      linkId = rows[0].id;
+    } else if (pId && code?.body?.code) {
+      // Fallback: create the link directly if the billing guard prevented
+      // the connect handler from creating the therapist_patients row
+      linkId = uuidv4();
+      await pool.query(
+        `INSERT INTO therapist_patients (id, therapist_id, patient_id, connection_code, status)
+         VALUES ($1, $2, $3, $4, 'active')`,
+        [linkId, tId, pId, code.body.code]
+      );
+    }
   });
 
   test('DELETE /connections without token returns 401', async () => {

@@ -1,5 +1,6 @@
 /* ============================================================
    Coter Pro — JS del panel de terapeuta
+   (sanitizeHTML y renderEmptyState en /js/shared-ui.js)
    ============================================================ */
 
 // Solo usar URL absoluta en dev local directo (sin nginx).
@@ -94,24 +95,16 @@ function showSkeleton(containerId, type = 'list', count = 3) {
   if (type === 'stats') {
     el.innerHTML = Array(4).fill('<div class="skeleton skeleton-card"></div>').join('');
   } else if (type === 'list') {
-    el.innerHTML = Array(count).fill(`<div style="padding:12px 0;border-bottom:1px solid #f1f5f9"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div>`).join('');
+    el.innerHTML = Array(count).fill('<div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div>').join('');
   } else if (type === 'table') {
     el.innerHTML = Array(count).fill(`<tr><td colspan="6"><div class="skeleton" style="height:40px"></div></td></tr>`).join('');
   }
 }
 
 
-// Sanitizar HTML para prevenir XSS en mensajes
-function sanitizeHTML(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
 function saveSession(t, rt, th){
   token=t;refreshToken=rt;therapist=th;
-  localStorage.setItem('coter_therapist',JSON.stringify({token,refresh_token:rt,therapist:th}));
+  localStorage.setItem('coter_therapist',JSON.stringify({therapist:th}));
 }
 
 async function doLogin(){
@@ -119,7 +112,7 @@ async function doLogin(){
   const password=document.getElementById('loginPassword').value.trim();
   if(!email||!password)return Swal.fire('Error','Completa todos los campos','error');
   try{
-    const r=await fetch(`${API}/therapists/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+    const r=await fetch(`${API}/therapists/login`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
     const d=await r.json();
     if(d.success){saveSession(d.token,d.refresh_token,d.therapist);showApp();}
     else Swal.fire('Error',d.error||'Credenciales inválidas','error');
@@ -134,7 +127,7 @@ async function doRegister(){
   if(!name||!email||!specialty||!password)return Swal.fire('Error','Completa todos los campos','error');
   if(password.length<6)return Swal.fire('Error','Contraseña: mínimo 6 caracteres','error');
   try{
-    const r=await fetch(`${API}/therapists/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,specialty,password})});
+    const r=await fetch(`${API}/therapists/register`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,specialty,password})});
     const d=await r.json();
     if(d.success){saveSession(d.token,d.refresh_token,d.therapist);showApp();}
     else Swal.fire('Error',d.error||'Error al registrarse','error');
@@ -147,7 +140,9 @@ function showRegister(){document.getElementById('loginScreen').classList.add('hi
 async function logout(){
   try{
     // Intentar revocar refresh tokens en el servidor
-    await fetch(`${API}/therapists/logout`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
+    const headers={'Content-Type':'application/json'};
+    if(token)headers.Authorization=`Bearer ${token}`;
+    await fetch(`${API}/therapists/logout`,{method:'POST',credentials:'include',headers});
   }catch(e){}
   disconnectSSE();
   localStorage.removeItem('coter_therapist');
@@ -156,28 +151,31 @@ async function logout(){
 
 // Refresh automático del access token
 async function refreshAccessToken(){
-  if (!refreshToken) throw new Error('No refresh token');
-  const r=await fetch(`${API}/therapists/refresh-token`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:refreshToken})});
+  const opts={method:'POST',credentials:'include',headers:{'Content-Type':'application/json'}};
+  if(refreshToken)opts.body=JSON.stringify({refresh_token:refreshToken});
+  const r=await fetch(`${API}/therapists/refresh-token`,opts);
   const d=await r.json();
   if(!d.success)throw new Error(d.error||'Refresh failed');
   token=d.token;
   refreshToken=d.refresh_token;
   // Actualizar localStorage
   const saved=JSON.parse(localStorage.getItem('coter_therapist')||'{}');
-  saved.token=token;
-  saved.refresh_token=refreshToken;
-  localStorage.setItem('coter_therapist',JSON.stringify(saved));
+  if(saved.therapist)localStorage.setItem('coter_therapist',JSON.stringify({therapist:saved.therapist}));
   return token;
 }
 
 // Wrapper de fetch con auto-refresh en 401
 async function api(url,opts={}){
-  const doFetch=()=>fetch(url,{...opts,headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`,...(opts.headers||{})}});
+  const doFetch=()=>{
+    const headers={'Content-Type':'application/json',...(opts.headers||{})};
+    if(token)headers.Authorization=`Bearer ${token}`;
+    return fetch(url,{...opts,credentials:'include',headers});
+  };
 
   let r=await doFetch();
 
   // Si 401, intentar refrescar el token una vez
-  if(r.status===401&&refreshToken){
+  if(r.status===401){
     if(!isRefreshing){
       isRefreshing=true;
       refreshPromise=refreshAccessToken().finally(()=>{isRefreshing=false;refreshPromise=null;});
@@ -208,7 +206,7 @@ function showApp(){
   document.getElementById('registerScreen').classList.add('hidden');
   document.getElementById('appScreen').classList.remove('hidden');
   document.getElementById('therapistName').textContent=therapist.name;
-  loadDashboard();loadPatients();loadCode();
+  loadDashboard();loadPatients();loadCode();loadAlerts();
   // Dashboard sigue usando polling 30s para stats que no son reactivos
   // (la actividad reciente y los contadores solo cambian cuando llega un
   // evento SSE, así que el polling es ahora opcional — pero lo conservamos
@@ -384,7 +382,7 @@ async function loadDashboard(){
     animateCounter(document.getElementById('statRisk'), db.atRisk);
     updateTrendChart(db.weeklyTrend||[]);
     const act=document.getElementById('recentActivity');
-    if(!db.recentActivity?.length){act.innerHTML='<p class="empty-msg">Sin actividad reciente</p>';return;}
+    if(!db.recentActivity?.length){renderEmptyState(act,{icon:'📊',title:'Sin actividad reciente',desc:'La actividad de tus pacientes aparecerá aquí cuando registren check-ins o completen tareas.'});return;}
     act.innerHTML=db.recentActivity.map((a,i)=>`<div class="recent-row" style="animation-delay:${i*40}ms"><span>${sanitizeHTML(a.patient_name||'Paciente '+a.patient_id?.slice(0,8))}</span><span>Ánimo: <strong>${a.mood}/10</strong></span><span class="recent-time">${new Date(a.created_at).toLocaleString('es-ES')}</span></div>`).join('');
   }catch(e){console.error(e);}
 }
@@ -402,7 +400,7 @@ async function loadPatients({force=false}={}){
   try{
     const patients=await PatientsCache.getPatients({force});
     const tbody=document.getElementById('patientsTableBody');
-    if(!patients.length){tbody.innerHTML='<tr><td colspan="6" class="empty-cell">No tienes pacientes aún</td></tr>';return;}
+    if(!patients.length){tbody.innerHTML='<tr><td colspan="6"><div class="empty-state" style="padding:36px 16px"><span class="empty-icon">👥</span><div class="empty-title">No tienes pacientes aún</div><div class="empty-desc">Genera un código de acceso y compártelo con tus pacientes para que se conecten.</div></div></td></tr>';return;}
     tbody.innerHTML=patients.map((p,i)=>{
       const badge=p.last_mood<=3?'badge-risk':p.last_mood>=7?'badge-ok':'badge-warn';
       return`<tr style="animation:fadeInUp .3s cubic-bezier(.22,1,.36,1) ${i*.04}s both"><td><strong>${sanitizeHTML(p.name||'Anónimo')}</strong><br><small class="id-sub">${p.id?.slice(0,12)}...</small></td><td>${new Date(p.connected_at).toLocaleDateString('es-ES')}</td><td>${p.last_checkin?new Date(p.last_checkin).toLocaleDateString('es-ES'):'Nunca'}</td><td><strong>${p.last_mood||'-'}/10</strong></td><td><span class="badge ${badge}">${p.last_mood<=3?'⚠️ Riesgo':'✅ Estable'}</span></td><td><button class="btn btn-p btn-sm btn-open-patient" data-patient-id="${p.id}">📋 Ver</button></td></tr>`;
@@ -418,7 +416,7 @@ async function openPatient(patientId){
     patientData=d.patient;
     currentPatientDataTicketsKey = (patientData.assignments || []).map(a => a.id + ':' + a.status).join(',');
     document.getElementById('modalPatientName').textContent=patientData.name||'Paciente '+patientId.slice(0,8);
-    renderChat();renderCheckins();renderTasks();renderGoals();renderNotes();
+    renderChat();renderCheckins();renderTasks();renderGoals();renderNotes();loadPreSession();loadInsights();
     // Eliminamos el patientPoll (antes 4s): los mensajes llegan por SSE
     // (ver handleSSEEvent → message:new) y se refrescan automáticamente
     // mediante refreshCurrentPatientData().
@@ -431,7 +429,7 @@ function closePatientModal(){document.getElementById('patientModal').classList.r
 function renderChat(){
   const box=document.getElementById('patientChat');
   const msgs=(patientData.messages||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
-  if(!msgs.length){box.innerHTML='<p class="empty-msg">No hay mensajes aún</p>';return;}
+  if(!msgs.length){renderEmptyState(box,{icon:'💬',title:'Sin mensajes',desc:'La conversación con este paciente aparecerá aquí.'});return;}
   box.innerHTML=msgs.map(m=>`<div class="msg ${m.is_therapist?'therapist':'patient'}"><div>${sanitizeHTML(m.message)}</div><small>${new Date(m.created_at).toLocaleString('es-ES')}</small></div>`).join('');
   box.scrollTop=box.scrollHeight;
 }
@@ -447,7 +445,7 @@ async function sendTherapistMsg(){
 
 function renderCheckins(){
   const box=document.getElementById('patientCheckins');const cis=patientData.checkIns||[];
-  if(!cis.length){box.innerHTML='<p class="empty-msg">Sin check-ins</p>';return;}
+  if(!cis.length){renderEmptyState(box,{icon:'🌤️',title:'Sin check-ins',desc:'El paciente aún no ha registrado check-ins emocionales.'});return;}
   box.innerHTML=cis.slice(0,30).map((c,i)=>`<div class="checkin-item" style="animation-delay:${i*.04}s"><div class="checkin-mood" data-mood="${c.mood}">${c.mood}</div><div><strong>Ánimo ${c.mood}/10</strong> | Ansiedad ${c.anxiety}/10 | Energía ${c.energy||'-'}/10<br><small class="muted">${new Date(c.created_at).toLocaleString('es-ES')}</small>${c.thoughts?`<br><em>"${sanitizeHTML(c.thoughts)}"</em>`:''}</div></div>`).join('');
   // Apply mood colors
   document.querySelectorAll('.checkin-mood[data-mood]').forEach(el=>{
@@ -458,7 +456,7 @@ function renderCheckins(){
 
 function renderTasks(){
   const box=document.getElementById('patientTasks');const tasks=patientData.assignments||[];
-  if(!tasks.length){box.innerHTML='<p class="empty-msg">Sin tareas asignadas</p>';return;}
+  if(!tasks.length){renderEmptyState(box,{icon:'📋',title:'Sin tareas asignadas',desc:'Asigna ejercicios desde la biblioteca TCC para que el paciente los complete.',cta:'Abrir biblioteca',ctaAction:()=>{closePatientModal();const tab=document.querySelector('.nav-item[data-tab="library"]');if(tab)tab.click();}});return;}
   box.innerHTML='';
   const kindLabels={thought_record:'Thought Record (Beck)',behavioral_activation:'Activación Conductual',graded_exposure:'Exposición Gradual'};
   tasks.forEach((t,idx)=>{
@@ -532,7 +530,7 @@ function showAddTask(){
 
 function renderGoals(){
   const box=document.getElementById('patientGoals');const goals=patientData.goals||[];
-  if(!goals.length){box.innerHTML='<p class="empty-msg">Sin objetivos</p>';return;}    box.innerHTML=goals.map((g,i)=>{
+  if(!goals.length){renderEmptyState(box,{icon:'🎯',title:'Sin objetivos definidos',desc:'Establece metas terapéuticas medibles para seguir el progreso del paciente.',cta:'Añadir objetivo',ctaAction:showAddGoal});return;}    box.innerHTML=goals.map((g,i)=>{
     const pct=Math.min(100,Math.round((g.current_value/g.target_value)*100));
     return`<div class="goal-item" style="animation-delay:${i*.04}s"><strong>${sanitizeHTML(g.title)}</strong> <span class="badge ${g.status==='completed'?'badge-ok':'badge-warn'}">${g.status==='completed'?'✅ Completado':'🎯 Activo'}</span><br><small>${sanitizeHTML(g.metric)}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" data-width="${pct}"></div></div>${g.status!=='completed'?`<input type="number" id="goalVal${g.id}" placeholder="Nuevo valor" class="goal-input"> <button class="btn btn-s btn-sm btn-update-goal" data-goal-id="${g.id}">Actualizar</button>`:''}</div>`;
   }).join('');
@@ -553,7 +551,7 @@ async function renderNotes(){
   const box=document.getElementById('patientNotes');
   try{
     const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes`);const d=await r.json();
-    if(!d.success||!d.notes?.length){box.innerHTML='<p class="empty-msg">Sin notas clínicas</p>';return;}
+    if(!d.success||!d.notes?.length){renderEmptyState(box,{icon:'📝',title:'Sin notas clínicas',desc:'Registra notas SOAP para documentar el progreso entre sesiones.',cta:'Nueva nota',ctaAction:showAddNote});return;}
     box.innerHTML=d.notes.map((n,i)=>{
       const date=new Date(n.created_at).toLocaleString('es-ES');
       const updated=n.updated_at&&n.updated_at!==n.created_at?`<span class="edited-tag"> (editada)</span>`:'';
@@ -1699,6 +1697,65 @@ async function showCalendarAssignTask(dateStr){
   });
 }
 
+// ==================== FACTURACIÓN ====================
+
+async function loadBilling(){
+  const container = document.getElementById('billingContent');
+  if (!container) return;
+  container.innerHTML = '<div class="card" style="grid-column:1/-1"><div style="text-align:center;padding:32px"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div>';
+  try {
+    const r = await api(`${API}/billing/status`);
+    const d = await r.json();
+    if (!d.success) {
+      container.innerHTML = '<div class="card" style="grid-column:1/-1"><p class="empty-msg error">Error al cargar información de facturación: ' + sanitizeHTML(d.error || 'Error desconocido') + '</p></div>';
+      return;
+    }
+    renderBilling(container, d.subscription);
+  } catch (e) {
+    console.error('[loadBilling]', e);
+    container.innerHTML = '<div class="card" style="grid-column:1/-1"><p class="empty-msg error">Error de conexión al cargar facturación</p></div>';
+  }
+}
+
+function renderBilling(container, sub) {
+  const status = sub.status || 'unknown';
+  const statusLabels = { trialing:'Período de prueba', active:'Activa', past_due:'Pago pendiente', canceled:'Cancelada', incomplete:'Configuración pendiente' };
+  const statusIcons = { trialing:'🧪', active:'✅', past_due:'⚠️', canceled:'❌', incomplete:'⏳' };
+  let patientCount = sub.patientCount || 0;
+  const priceEur = (sub.pricePerPatientCents / 100).toFixed(2);
+  const estimatedEur = (sub.estimatedMonthlyCostCents / 100).toFixed(2);
+  let h = "";
+  h += '<div class="billing-status-card"><div class="billing-status-icon ' + status + '">' + (statusIcons[status] || '📋') + '</div><div class="billing-status-body"><h2>' + sanitizeHTML(statusLabels[status] || status) + ' <span class="billing-status-badge ' + status + '">' + status + '</span></h2>';
+  if (status === 'trialing' && sub.trial) h += '<p>Disfrutas de acceso completo gratuito durante ' + sub.trial.daysLeft + ' días más.</p>';
+  else if (status === 'active') h += '<p>Tu suscripción está activa. Se te facturará <strong>' + priceEur + ' €/paciente/mes</strong>.</p>';
+  else if (status === 'past_due') h += '<p>Tu último pago no se ha podido procesar. Tienes 7 días de gracia para actualizar tu método de pago.</p>';
+  else if (status === 'canceled') h += '<p>Tu suscripción ha sido cancelada. Reactívala para seguir accediendo a tus pacientes.</p>';
+  h += '</div></div>';
+  if (status === 'trialing' && sub.trial) {
+    const trialPct = Math.min(100, Math.round(((14 - sub.trial.daysLeft) / 14) * 100));
+    const endsDate = sub.trial.endsAt ? new Date(sub.trial.endsAt).toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' }) : '';
+    h += '<div class="billing-trial-banner"><h3>🧪 Período de prueba — ' + sub.trial.daysLeft + ' día' + (sub.trial.daysLeft !== 1 ? 's' : '') + ' restante' + (sub.trial.daysLeft !== 1 ? 's' : '') + '</h3>';
+    h += '<p style="font-size:13px;color:var(--muted);margin:0 0 4px">El trial finaliza el <strong>' + sanitizeHTML(endsDate) + '</strong>. Después se facturará <strong>' + priceEur + ' €/paciente/mes</strong>.</p>';
+    h += '<div class="billing-trial-bar"><div class="billing-trial-fill" style="width:' + trialPct + '%"></div></div>';
+    h += '<div class="billing-trial-meta"><span>Inicio</span><span><strong>' + sub.trial.daysLeft + ' días</strong> restantes</span><span>Fin: ' + sanitizeHTML((endsDate || '').split(',')[0] || endsDate) + '</span></div></div>';
+  }
+  h += '<div class="billing-stat"><div class="billing-stat-num" id="billingPatientCount">' + patientCount + '</div><div class="billing-stat-label">Pacientes activos</div></div>';
+  h += '<div class="billing-stat"><div class="billing-stat-num" id="billingMonthlyCost">' + estimatedEur + ' €</div><div class="billing-stat-label">Coste mensual estimado</div></div>';
+  h += '<div class="card" style="grid-column:1/-1"><h2>📊 Detalles del plan</h2>';
+  h += '<div class="billing-info-row"><span class="billing-info-label">Precio por paciente</span><span class="billing-info-value">' + priceEur + ' €/mes</span></div>';
+  h += '<div class="billing-info-row"><span class="billing-info-label">Pacientes activos este mes</span><span class="billing-info-value">' + patientCount + '</span></div>';
+  h += '<div class="billing-info-row"><span class="billing-info-label">Estimado mensual</span><span class="billing-info-value">' + estimatedEur + ' €</span></div>';
+  if (sub.currentPeriodStart) h += '<div class="billing-info-row"><span class="billing-info-label">Período actual</span><span class="billing-info-value">' + new Date(sub.currentPeriodStart).toLocaleDateString('es-ES') + ' — ' + new Date(sub.currentPeriodEnd).toLocaleDateString('es-ES') + '</span></div>';
+  if (sub.trial && sub.trial.endsAt) h += '<div class="billing-info-row"><span class="billing-info-label">Fin del trial</span><span class="billing-info-value">' + new Date(sub.trial.endsAt).toLocaleDateString('es-ES') + '</span></div>';
+  h += '</div>';
+  if (status === 'trialing' || status === 'active' || status === 'past_due') {
+    h += '<div class="billing-stripe-cta"><p>La pasarela de pago con Stripe estará disponible próximamente.<br>Por ahora, disfruta del acceso completo durante el trial.</p>';
+    h += '<button class="billing-stripe-btn" disabled title="Próximamente"><svg viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px;flex-shrink:0"><path d="M13.976 8.872c-.17-1.217-.93-2.138-1.936-2.682-.562-.304-1.185-.498-1.828-.614l.735-3.118.057-.245c0-.143-.102-.266-.247-.278l-2.006-.153a.28.28 0 00-.2.07.265.265 0 00-.08.195l-.753 3.191c-.14.015-.28.032-.418.052l.917-3.906c.016-.072.024-.146.024-.22 0-.144-.102-.267-.247-.278L6.423.646a.28.28 0 00-.2.07.265.265 0 00-.08.195l-.916 3.908a25.2 25.2 0 00-.347.05L4.005 1.96c-.017-.072-.025-.146-.025-.22 0-.144-.102-.266-.248-.278L2.756 1.31a.28.28 0 00-.2.07.265.265 0 00-.08.195l.88 3.743a.04.04 0 01.002.023 9.3 9.3 0 00-1.092.418c-1.29.62-2.24 1.726-2.18 3.48.05 1.455.949 2.515 2.159 3.025 1.43.604 2.782.67 3.656.764.964.103 1.78.401 1.924 1.103.17.833-.394 1.71-1.46 2.237-1.114.55-2.542.516-3.763-.134-.306-.163-.586-.36-.834-.593a.27.27 0 00-.258-.08.266.266 0 00-.18.202l-.77 3.255a.284.284 0 00.076.276c.452.416 1.007.746 1.63.974 1.331.487 2.776.578 4.044.244 2.378-.626 3.921-2.427 3.754-4.657z"/></svg> Pagar con Stripe (próximamente)</button></div>';
+  }
+  container.innerHTML = h;
+  requestAnimationFrame(function() { const numEl = document.getElementById('billingPatientCount'); if (numEl) animateCounter(numEl, patientCount); });
+}
+
 // ==================== EVENT DELEGATION ====================
 document.addEventListener('click', function(e){
   const btn = e.target.closest('[data-action]');
@@ -1710,7 +1767,10 @@ document.addEventListener('click', function(e){
       case 'show-register': showRegister(); break;
       case 'show-login': showLogin(); break;
       case 'logout': logout(); break;
-      case 'refresh-patients': loadPatients({force:true}); break;
+      case 'refresh-billing': loadBilling(); break;
+      case 'ack-alert': updateOneAlertStatus(btn.dataset.alertId, 'acknowledged'); break;
+      case 'resolve-alert': updateOneAlertStatus(btn.dataset.alertId, 'resolved'); break;
+              case 'refresh-patients': loadPatients({force:true}); break;
       case 'refresh-code': loadCode(); break;
       case 'gen-code': generateCode(); break;
       case 'new-patient': showNewPatient(); break;
@@ -1726,23 +1786,28 @@ document.addEventListener('click', function(e){
       case 'next-month': nextMonth(); break;
       case 'go-today': goToToday(); break;
       case 'cal-assign-task': showCalendarAssignTask(btn.dataset.date); break;
+      case 'toggle-sidebar': toggleSidebar(); break;
+      case 'close-sidebar': closeSidebar(); break;
       default: console.warn('Unknown data-action:', action);
     }
     return;
   }
   
   // Nav tabs
+  closeSidebar();
   const navItem = e.target.closest('.nav-item[data-tab]');
   if (navItem) {
-    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n=>{n.classList.remove('active');n.removeAttribute('aria-current');});
     document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
     navItem.classList.add('active');
+    navItem.setAttribute('aria-current','page');
     const tabId = 'tab-'+navItem.dataset.tab;
     const tabEl = document.getElementById(tabId);
     if (tabEl) tabEl.classList.add('active');
     if(navItem.dataset.tab==='patients')loadPatients();
     if(navItem.dataset.tab==='code')loadCode();
     if(navItem.dataset.tab==='calendar')loadCalendar();
+    if(navItem.dataset.tab==='billing')loadBilling();
     if(navItem.dataset.tab==='library')loadTemplates();
     return;
   }
@@ -1750,9 +1815,10 @@ document.addEventListener('click', function(e){
   // Modal tabs
   const modalTab = e.target.closest('.modal-tab[data-ptab]');
   if (modalTab) {
-    document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.modal-tab').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false');});
     document.querySelectorAll('.modal-tab-content').forEach(c=>c.classList.remove('active'));
     modalTab.classList.add('active');
+    modalTab.setAttribute('aria-selected','true');
     const ptabEl = document.getElementById(modalTab.dataset.ptab);
     if (ptabEl) ptabEl.classList.add('active');
     return;
@@ -1815,4 +1881,4 @@ document.addEventListener('input', function(e){
 
 // ==================== AUTO-LOGIN ====================
 const saved=localStorage.getItem('coter_therapist');
-if(saved){try{const s=JSON.parse(saved);token=s.token;refreshToken=s.refresh_token;therapist=s.therapist;showApp();}catch(e){localStorage.removeItem('coter_therapist');}}
+if(saved){try{const s=JSON.parse(saved);token=s.token||null;refreshToken=s.refresh_token||null;therapist=s.therapist;if(therapist)showApp();}catch(e){localStorage.removeItem('coter_therapist');}}

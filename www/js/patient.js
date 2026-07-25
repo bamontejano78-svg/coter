@@ -1,5 +1,6 @@
 /* ============================================================
    Coter — JS de la app de paciente
+   (sanitizeHTML y renderEmptyState en /js/shared-ui.js)
    ============================================================ */
 
 // URL de API: usa ruta relativa para funcionar en cualquier dominio
@@ -40,16 +41,8 @@ function animateCounter(el, target, duration = 600) {
   requestAnimationFrame(update);
 }
 
-// Sanitizar HTML para prevenir XSS en mensajes
-function sanitizeHTML(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
 const saved=localStorage.getItem('patientConnection');
-if(saved){try{patientData=JSON.parse(saved);patientId=patientData.patient_id;authToken=patientData.auth_token;showMainScreen();loadEverything();}catch(e){localStorage.removeItem('patientConnection');}}
+if(saved){try{patientData=JSON.parse(saved);patientId=patientData.patient_id;authToken=patientData.auth_token||null;showMainScreen();loadEverything();}catch(e){localStorage.removeItem('patientConnection');}}
 
 function updateSlider(id){document.getElementById(id+'Val').textContent=document.getElementById(id).value;}
 
@@ -57,9 +50,9 @@ async function connect(){
   const code=document.getElementById('codeInput').value.trim().toUpperCase();
   if(!code)return toastMsg('Ingresa el código de acceso','error');
   try{
-    const r=await fetch(`${API}/patients/connect`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_code:code})});
+    const r=await fetch(`${API}/patients/connect`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_code:code})});
     const d=await r.json();
-    if(d.success){patientData=d;patientId=d.patient_id;authToken=d.auth_token;localStorage.setItem('patientConnection',JSON.stringify(d));showMainScreen();loadEverything();toastMsg(`¡Conectado con ${d.therapist.name}!`);}
+    if(d.success){patientData={...d};patientId=d.patient_id;authToken=d.auth_token;const stored={...d};delete stored.auth_token;localStorage.setItem('patientConnection',JSON.stringify(stored));showMainScreen();loadEverything();toastMsg(`¡Conectado con ${d.therapist.name}!`);}
     else toastMsg(d.error||'Código inválido','error');
   }catch(e){toastMsg('Error de conexión con el servidor','error');}
 }
@@ -101,13 +94,14 @@ function disconnectSSE() {
 }
 
 async function connectSSE() {
-  if (!patientId || !authToken) return;
+  if (!patientId) return;
   disconnectSSE();
   try {
     // 1) Pedir un ticket de un solo uso al backend (auth normal con Bearer)
     const r = await fetch(API + '/events/ticket/patient/' + patientId, {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + authToken }
+      credentials: 'include',
+      headers: authHeaders(false)
     });
     const d = await r.json();
     if (!d || !d.success || !d.ticket) {
@@ -198,11 +192,20 @@ function handleSSEEvent(payload) {
   }
 }
 
-function authHeaders(){return{'Content-Type':'application/json','Authorization':`Bearer ${authToken}`};}
+function authHeaders(includeContentType=true){
+  const headers={};
+  if(includeContentType)headers['Content-Type']='application/json';
+  if(authToken)headers.Authorization=`Bearer ${authToken}`;
+  return headers;
+}
+
+function authFetch(url, opts={}){
+  return fetch(url,{...opts,credentials:'include',headers:{...authHeaders(!(opts.body instanceof FormData)),...(opts.headers||{})}});
+}
 
 async function sendCheckin(){
   const payload={mood:+document.getElementById('mood').value,anxiety:+document.getElementById('anxiety').value,energy:+document.getElementById('energy').value,thoughts:document.getElementById('thoughts').value};
-  await fetch(`${API}/patients/${patientId}/check-ins`,{method:'POST',headers:authHeaders(),body:JSON.stringify(payload)});
+  await authFetch(`${API}/patients/${patientId}/check-ins`,{method:'POST',body:JSON.stringify(payload)});
   toastMsg('✅ Check-in enviado a tu terapeuta');
   document.getElementById('thoughts').value='';
   loadStats();loadMessages();
@@ -210,10 +213,10 @@ async function sendCheckin(){
 
 async function loadMessages(){
   try{
-    const r=await fetch(`${API}/patients/${patientId}/messages`,{headers:authHeaders()});const d=await r.json();
+    const r=await authFetch(`${API}/patients/${patientId}/messages`);const d=await r.json();
     const box=document.getElementById('chatBox');
     const msgs=(d.messages||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
-    if(!msgs.length){box.innerHTML='<div class="chat-empty-msg">¡Escribe el primer mensaje! ✍️</div>';return;}
+    if(!msgs.length){renderEmptyState(box,{icon:'💬',title:'Sin mensajes aún',desc:'Escribe el primer mensaje para empezar la conversación con tu terapeuta.',cta:'Ir al chat',ctaAction:()=>document.getElementById('msgInput')?.focus()});return;}
     box.innerHTML=msgs.map((m,i)=>`<div class="msg ${m.is_therapist?'therapist':'patient'}" style="animation-delay:${Math.min(i*.03,.3)}s"><strong>${sanitizeHTML(m.is_therapist?patientData.therapist.name:'Tú')}</strong><div class="msg-body">${sanitizeHTML(m.message)}</div><div class="msg-time">${new Date(m.created_at).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</div></div>`).join('');
     box.scrollTop=box.scrollHeight;
   }catch(e){}
@@ -223,7 +226,7 @@ async function sendMessage(){
   const input=document.getElementById('msgInput');const msg=input.value.trim();
   if(!msg)return;
   try{
-    const r=await fetch(`${API}/patients/${patientId}/messages`,{method:'POST',headers:authHeaders(),body:JSON.stringify({message:msg})});
+    const r=await authFetch(`${API}/patients/${patientId}/messages`,{method:'POST',body:JSON.stringify({message:msg})});
     const d=await r.json();
     // FIX: detectar rechazo del backend (ej: status='inactive' tras disconnect)
     // y avisar al paciente en vez de pretender que el mensaje salió.
@@ -237,10 +240,10 @@ async function sendMessage(){
 
 async function loadTasks(){
   try{
-    const r=await fetch(`${API}/patients/${patientId}/assignments`,{headers:authHeaders()});const d=await r.json();
+    const r=await authFetch(`${API}/patients/${patientId}/assignments`);const d=await r.json();
     const list=document.getElementById('tasksList');
     list.innerHTML='';
-    if(!d.assignments?.length){list.innerHTML='<div class="empty-state">No tienes tareas pendientes 🎉</div>';return;}
+    if(!d.assignments?.length){renderEmptyState(list,{icon:'✅',title:'Sin tareas pendientes',desc:'Tu terapeuta te asignará ejercicios y tareas para trabajar entre sesiones.'});return;}
     const now=new Date();
     d.assignments.forEach((t, i)=>{
       const card=document.createElement('div');
@@ -308,16 +311,16 @@ async function completeTask(id){
   // Legacy path: solo aplica a kind='classic' (los kinds clínicos usan el
   // botón "Finalizar ejercicio" dentro del formulario interactivo, que ya
   // publica vía /sessions/:sid/complete y marca el assignment).
-  await fetch(`${API}/patients/${patientId}/assignments/${id}`,{method:'PUT',headers:authHeaders(),body:JSON.stringify({completed:true})});
+  await authFetch(`${API}/patients/${patientId}/assignments/${id}`,{method:'PUT',body:JSON.stringify({completed:true})});
   toastMsg('🎉 ¡Tarea completada!');
   loadTasks();loadStats();
 }
 
 async function loadGoals(){
   try{
-    const r=await fetch(`${API}/patients/${patientId}/goals`,{headers:authHeaders()});const d=await r.json();
+    const r=await authFetch(`${API}/patients/${patientId}/goals`);const d=await r.json();
     const list=document.getElementById('goalsList');
-    if(!d.goals?.length){list.innerHTML='<div class="empty-state">Sin objetivos definidos</div>';return;}
+    if(!d.goals?.length){renderEmptyState(list,{icon:'🎯',title:'Sin objetivos definidos',desc:'Tu terapeuta establecerá metas terapéuticas para seguir tu progreso.'});return;}
     list.innerHTML=d.goals.map((g,i)=>{const pct=Math.min(100,Math.round((g.current_value/g.target_value)*100));return`<div class="goal-item" style="animation-delay:${i*.04}s"><strong>${sanitizeHTML(g.title)}</strong><br><small>${sanitizeHTML(g.metric)}: ${g.current_value}/${g.target_value}</small><div class="progress-bar"><div class="progress-fill" data-width="${pct}"></div></div></div>`;}).join('');
     // Apply progress bar widths after render
     requestAnimationFrame(()=>{
@@ -328,12 +331,12 @@ async function loadGoals(){
 
 async function loadStats(){
   try{
-    const r=await fetch(`${API}/patients/${patientId}/check-ins`,{headers:authHeaders()});const d=await r.json();
+    const r=await authFetch(`${API}/patients/${patientId}/check-ins`);const d=await r.json();
     const checkIns=d.check_ins||[];
     const streak = calcStreak(checkIns);
     animateCounter(document.getElementById('streakDays'), streak);
     if(checkIns.length){const recent=checkIns.slice(0,7);document.getElementById('avgMood').textContent=(recent.reduce((s,c)=>s+c.mood,0)/recent.length).toFixed(1);}
-    const tr=await fetch(`${API}/patients/${patientId}/assignments`,{headers:authHeaders()});const td=await tr.json();
+    const tr=await authFetch(`${API}/patients/${patientId}/assignments`);const td=await tr.json();
     const done = (td.assignments||[]).filter(t=>t.status==='completed').length;
     animateCounter(document.getElementById('tasksDone'), done);
     updateMoodChart(checkIns);
@@ -372,11 +375,11 @@ function startTechnique(type){
     },willClose:()=>toastMsg(`✅ ${t.title.split(' ').slice(0,2).join(' ')} completada`)});
 }
 
-function disconnect(){if(confirm('¿Desconectarte de tu terapeuta?')){disconnectSSE();localStorage.removeItem('patientConnection');location.reload();}}
+async function disconnect(){if(confirm('¿Desconectarte de tu terapeuta?')){try{await authFetch(`${API}/patients/${patientId}/logout`,{method:'POST'});}catch(e){}disconnectSSE();localStorage.removeItem('patientConnection');location.reload();}}
 
 async function loadProgress(){
   try{
-    const r=await fetch(`${API}/patients/${patientId}/progress`,{headers:authHeaders()});const d=await r.json();
+    const r=await authFetch(`${API}/patients/${patientId}/progress`);const d=await r.json();
     if(!d.success)return;
     const p=d.progress;
     const ach=document.getElementById('progressAchievements');
@@ -421,7 +424,7 @@ async function loadProgress(){
 
 async function loadNotifications(){
   try{
-    const r=await fetch(`${API}/patients/${patientId}/notifications`,{headers:authHeaders()});const d=await r.json();
+    const r=await authFetch(`${API}/patients/${patientId}/notifications`);const d=await r.json();
     if(!d.success)return;
     const badge=document.getElementById('notifBadge');
     const count=d.unread_count||0;
@@ -433,7 +436,7 @@ async function loadNotifications(){
 
 function renderNotifications(notifs){
   const list=document.getElementById('notifList');
-  if(!notifs.length){list.innerHTML='<div class="notif-empty">🔔 No tienes notificaciones</div>';return;}    list.innerHTML=notifs.map((n,i)=>{
+  if(!notifs.length){list.innerHTML='<div class="empty-state" style="padding:28px 16px"><span class="empty-icon">🔔</span><div class="empty-title">Sin notificaciones</div><div class="empty-desc">Aquí aparecerán avisos de tu terapeuta y recordatorios.</div></div>';return;}    list.innerHTML=notifs.map((n,i)=>{
     const iconMap={assignment:'📋',message:'💬',reminder:'⏰',overdue:'⚠️',goal:'🎯',system:'ℹ️'};
     const icon=iconMap[n.type]||'📌';
     const time=new Date(n.created_at);
@@ -446,13 +449,16 @@ function renderNotifications(notifs){
 
 function toggleNotifications(){
   const panel=document.getElementById('notifPanel');
+  const notifBar=document.querySelector('.notif-bar');
   panel.classList.toggle('show');
-  if(panel.classList.contains('show'))loadNotifications();
+  const isOpen=panel.classList.contains('show');
+  if(notifBar)notifBar.setAttribute('aria-expanded',isOpen?'true':'false');
+  if(isOpen)loadNotifications();
 }
 
 async function markNotificationRead(id, el){
   try{
-    await fetch(`${API}/patients/${patientId}/notifications/${id}/read`,{method:'PUT',headers:authHeaders()});
+    await authFetch(`${API}/patients/${patientId}/notifications/${id}/read`,{method:'PUT'});
     el.classList.remove('unread');
     const badge=document.getElementById('notifBadge');
     let count=parseInt(badge.textContent)||0;
@@ -464,7 +470,7 @@ async function markNotificationRead(id, el){
 
 async function markAllRead(){
   try{
-    await fetch(`${API}/patients/${patientId}/notifications/read-all`,{method:'PUT',headers:authHeaders()});
+    await authFetch(`${API}/patients/${patientId}/notifications/read-all`,{method:'PUT'});
     const badge=document.getElementById('notifBadge');
     badge.classList.add('hidden');
     loadNotifications();
@@ -518,6 +524,7 @@ document.addEventListener('click', function(e){
 document.addEventListener('input', function(e){
   if (e.target.dataset.slider) {
     updateSlider(e.target.dataset.slider);
+    e.target.setAttribute('aria-valuenow', e.target.value);
   }
 });
 
