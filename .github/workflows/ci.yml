@@ -76,6 +76,7 @@ jobs:
           JWT_SECRET: ${{ secrets.TEST_JWT_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.TEST_ENCRYPTION_KEY }}
           CORS_ORIGINS: http://localhost:3000
+          DB_CONNECTION_TIMEOUT_MS: 15000
 
   # ─── DOCKER BUILD, SCAN & PUSH ──────────────────────────
   docker:

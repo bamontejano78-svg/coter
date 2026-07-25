@@ -34,7 +34,7 @@ const DB_CONNECTION_TIMEOUT_MS_RAW = parseInt(process.env.DB_CONNECTION_TIMEOUT_
 const DB_POOL_MIN = Number.isNaN(DB_POOL_MIN_RAW) ? (isTest ? 0 : 2) : DB_POOL_MIN_RAW;
 const DB_POOL_MAX = Number.isNaN(DB_POOL_MAX_RAW) ? 10 : DB_POOL_MAX_RAW;
 const DB_CONNECTION_TIMEOUT_MS = Number.isNaN(DB_CONNECTION_TIMEOUT_MS_RAW)
-  ? (isTest ? 2000 : 15000)
+  ? (isTest ? 10000 : 15000)
   : DB_CONNECTION_TIMEOUT_MS_RAW;
 
 // ─── JWT ────────────────────────────────────────────────────────
