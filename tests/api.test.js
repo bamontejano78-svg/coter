@@ -1653,13 +1653,20 @@ describe('Migration 007 — Embedded Clinical Exercises seed', () => {
   });
 
   test('existing task_templates rows default to exercise_kind = \'classic\' (backwards compatibility)', async () => {
-    // Las 18 plantillas legacy del DEFAULT_TASK_TEMPLATES siguen funcionando
-    // con kind=classic. Esto valida que el ADD COLUMN ... DEFAULT 'classic'
-    // tomo efecto retroactivamente para filas preexistentes.
     const { rows } = await pool.query(
       "SELECT exercise_kind, COUNT(*) AS count FROM task_templates WHERE exercise_kind = 'classic' GROUP BY exercise_kind"
     );
     const classicCount = rows.length > 0 ? parseInt(rows[0].count) : 0;
+
+    // Diagnóstico si no hay templates classic (para depurar en CI)
+    if (classicCount === 0) {
+      const { rows: all } = await pool.query(
+        'SELECT exercise_kind, COUNT(*)::int AS n FROM task_templates GROUP BY exercise_kind'
+      );
+      const dist = all.map(r => `${r.exercise_kind}:${r.n}`).join(', ');
+      console.log('TASK_TEMPLATES distribution:', dist || '(empty table)');
+    }
+
     expect(classicCount).toBeGreaterThanOrEqual(18);
   });
 

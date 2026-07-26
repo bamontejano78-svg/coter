@@ -175,7 +175,7 @@ async function seedTaskTemplates() {
       phs.push('($' + b + ', NULL, $' + (b + 1) + ', $' + (b + 2) + ', $' + (b + 3) + ', $' + (b + 4) + ', $' + (b + 5) + ', $' + (b + 6) + ')');
     });
     await p.query(
-      'INSERT INTO task_templates (id, therapist_id, category, title, instructions, difficulty, duration_min, exercise_kind) VALUES ' + phs.join(', ') + ' ON CONFLICT DO NOTHING',
+      'INSERT INTO task_templates (id, therapist_id, category, title, instructions, difficulty, duration_min, exercise_kind) VALUES ' + phs.join(', '),
       params
     );
   }
