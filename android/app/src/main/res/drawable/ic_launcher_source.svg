@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="108" height="108" viewBox="0 0 108 108">
+  <!-- Background circle for round icon variant -->
+  <rect width="108" height="108" rx="24" fill="#4f46e5"/>
+
+  <!-- White brand mark container -->
+  <rect x="22" y="22" width="64" height="64" rx="16" fill="#ffffff"/>
+
+  <!-- Indigo 'C' cutout -->
+  <path d="M40,38 C40,32.5 44.5,28 50,28 L70,28 C72.2,28 74,29.8 74,32 C74,34.2 72.2,36 70,36 L52,36 C49.8,36 48,37.8 48,40 L48,68 C48,70.2 49.8,72 52,72 L70,72 C72.2,72 74,73.8 74,76 C74,78.2 72.2,80 70,80 L50,80 C44.5,80 40,75.5 40,70 Z" fill="#4f46e5"/>
+</svg>
