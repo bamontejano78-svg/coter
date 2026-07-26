@@ -178,7 +178,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
       name: staging
-      url: https://${{ secrets.SSH_HOST }}
+      url: https://coter.app
 
     steps:
       - name: Deploy via SSH
