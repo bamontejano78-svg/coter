@@ -1244,6 +1244,28 @@
   .iw-intensity-fill {
     background: linear-gradient(90deg, var(--s), var(--w), var(--d));
   }
+
+  /* ── BA Widgets ────────────────────────────────── */
+  .iw-pleasant-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,.12);
+  }
+
+  .iw-pleasant-better {
+    color: var(--s);
+  }
+
+  .iw-pleasant-neutral {
+    color: var(--p-light);
+  }
+
+  /* ── Exposure Widgets ───────────────────────────── */
+  .iw-ladder-rung:hover {
+    box-shadow: 0 2px 6px rgba(0,0,0,.12);
+  }
+
+  .iw-exposure-reduction {
+    color: var(--s);
+  }
 }
 
 /* ─── Responsive ────────────────────────────────────────── */
@@ -1267,14 +1289,49 @@
     font-size: 12px;
   }
 
+  /* BA Widgets */
   .iw-ba-row {
     flex-wrap: wrap;
+    position: relative;
   }
 
   .iw-ba-time { width: 60px; }
   .iw-ba-rating { width: 100%; flex-basis: 100%; }
   .iw-ba-remove { margin-top: 0; position: absolute; top: 4px; right: 4px; }
-  .iw-ba-row { position: relative; }
+
+  .iw-weekly-tab {
+    font-size: 10px;
+    padding: 8px 2px;
+  }
+
+  .iw-weekly-tab-day { font-size: 9.5px; }
+
+  /* Exposure Widgets */
+  .iw-exposure-suds-row {
+    grid-template-columns: 1fr;
+  }
+
+  .iw-exposure-extra {
+    flex-direction: column;
+  }
+
+  .iw-exposure-date {
+    max-width: 100%;
+  }
+
+  .iw-ladder-info {
+    min-width: 100px;
+  }
+
+  .iw-ladder-name {
+    font-size: 12px;
+  }
+
+  /* Grounding */
+  .iw-grounding-row .iw-input {
+    font-size: 12.5px;
+    height: 36px;
+  }
 }
 
 /* ─── Reduced motion ────────────────────────────────────── */

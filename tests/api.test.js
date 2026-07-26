@@ -379,6 +379,179 @@ describe('Patient API', () => {
     });
   });
 
+  // ─── WIDGET-COMPLETE ──────────────────────────────────
+  describe('POST /widget-complete', () => {
+    let widgetAssignmentId;
+
+    beforeAll(async () => {
+      // Crear una tarea fresca para los tests de widget-complete
+      // (la del bloque Assignments ya se completó con PUT)
+      const res = await request(app)
+        .post('/api/v1/therapists/patients/' + patientId + '/assignments')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({
+          type: 'behavioral_activation',
+          title: 'Diario de actividades',
+          instructions: 'Registra tus actividades del día',
+        });
+      widgetAssignmentId = res.body.assignment_id;
+    });
+
+    test('completes a widget session, creates exercise_sessions row, and marks assignment done', async () => {
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .set('Authorization', 'Bearer ' + authToken)
+        .send({
+          assignment_id: widgetAssignmentId,
+          exercise_kind: 'widget_ba_activity_diary',
+          widget_responses: { mood: 7, activities: [{ time: '10:00', activity: 'Caminar', pleasure: 8, mastery: 6 }] },
+        });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.session_id).toBeDefined();
+      expect(res.body.assignment_id).toBe(widgetAssignmentId);
+      expect(res.body.exercise_kind).toBe('widget_ba_activity_diary');
+      expect(res.body.completed_at).toBeDefined();
+
+      // Verificar que la sesión se guardó en BD
+      const { rows: sessRows } = await pool.query(
+        'SELECT id, exercise_kind, responses, is_complete FROM exercise_sessions WHERE id = $1',
+        [res.body.session_id]
+      );
+      expect(sessRows.length).toBe(1);
+      expect(sessRows[0].exercise_kind).toBe('widget_ba_activity_diary');
+      expect(sessRows[0].is_complete).toBe(true);
+      expect(sessRows[0].responses).toHaveProperty('mood', 7);
+
+      // Verificar que el assignment se marcó como completado
+      const { rows: aRows } = await pool.query(
+        'SELECT status FROM assignments WHERE id = $1',
+        [widgetAssignmentId]
+      );
+      expect(aRows[0].status).toBe('completed');
+    });
+
+    test('rejects missing assignment_id', async () => {
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .set('Authorization', 'Bearer ' + authToken)
+        .send({ exercise_kind: 'widget_test', widget_responses: {} });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toContain('assignment_id');
+    });
+
+    test('rejects missing exercise_kind', async () => {
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .set('Authorization', 'Bearer ' + authToken)
+        .send({ assignment_id: widgetAssignmentId, widget_responses: { x: 1 } });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toContain('exercise_kind');
+    });
+
+    test('returns 404 for non-existent assignment', async () => {
+      const fakeId = '00000000-0000-0000-0000-000000000000';
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .set('Authorization', 'Bearer ' + authToken)
+        .send({ assignment_id: fakeId, exercise_kind: 'widget_test' });
+      expect(res.statusCode).toBe(404);
+      expect(res.body.error).toContain('Tarea no encontrada');
+    });
+
+    test('returns 404 for assignment belonging to a different patient', async () => {
+      // Conectar otro paciente y obtener su assignment
+      const codeRes = await request(app)
+        .post('/api/v1/therapists/connection-codes')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({ duration_hours: 24, max_uses: 1 });
+      const connectRes = await request(app)
+        .post('/api/v1/patients/connect')
+        .send({ connection_code: codeRes.body.code });
+      const otherPatientId = connectRes.body.patient_id;
+      const otherAuthToken = connectRes.body.auth_token;
+
+      const createRes = await request(app)
+        .post('/api/v1/therapists/patients/' + otherPatientId + '/assignments')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({ type: 'cbt', title: 'Tarea de otro paciente', instructions: 'test' });
+      const otherAssignmentId = createRes.body.assignment_id;
+
+      // Intentar completar la tarea del otro paciente con el auth del primer paciente
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .set('Authorization', 'Bearer ' + authToken)
+        .send({ assignment_id: otherAssignmentId, exercise_kind: 'widget_test' });
+      expect(res.statusCode).toBe(404);
+    });
+
+    test('rejects already-completed assignment', async () => {
+      // widgetAssignmentId ya fue completado en el primer test de este bloque
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .set('Authorization', 'Bearer ' + authToken)
+        .send({ assignment_id: widgetAssignmentId, exercise_kind: 'widget_ba_activity_diary', widget_responses: { retry: true } });
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toContain('finalizada');
+    });
+
+    test('returns 401 without auth token', async () => {
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .send({ assignment_id: widgetAssignmentId, exercise_kind: 'widget_test' });
+      expect(res.statusCode).toBe(401);
+    });
+
+    test('accepts empty widget_responses (defaults to {})', async () => {
+      // Crear otra tarea fresca
+      const createRes = await request(app)
+        .post('/api/v1/therapists/patients/' + patientId + '/assignments')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({ type: 'cbt', title: 'Widget sin respuestas', instructions: 'test empty' });
+      const aid = createRes.body.assignment_id;
+
+      const res = await request(app)
+        .post('/api/v1/patients/' + patientId + '/widget-complete')
+        .set('Authorization', 'Bearer ' + authToken)
+        .send({ assignment_id: aid, exercise_kind: 'widget_ba_activity_diary' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    test('publishes task:completed event to therapist topic', async () => {
+      // Crear otra tarea fresca para testear el evento
+      const { rows: tpRows } = await pool.query(
+        'SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = $2',
+        [patientId, 'active']
+      );
+      const tid = tpRows[0]?.therapist_id;
+
+      const createRes = await request(app)
+        .post('/api/v1/therapists/patients/' + patientId + '/assignments')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({ type: 'cbt', title: 'Test widget event', instructions: 'test' });
+      const aid = createRes.body.assignment_id;
+
+      const publishSpy = jest.spyOn(bus, 'publish');
+      try {
+        await request(app)
+          .post('/api/v1/patients/' + patientId + '/widget-complete')
+          .set('Authorization', 'Bearer ' + authToken)
+          .send({ assignment_id: aid, exercise_kind: 'widget_ba_activity_diary', widget_responses: { test: true } });
+
+        const taskCompletedCalls = publishSpy.mock.calls.filter(function (c) { return c[1] === 'task:completed'; });
+        expect(taskCompletedCalls.length).toBeGreaterThanOrEqual(1);
+        if (tid) {
+          const call = taskCompletedCalls.find(function (c) { return c[0] === 'therapist:' + tid; });
+          expect(call).toBeDefined();
+          expect(call[2]).toMatchObject({ patientId: patientId, assignmentId: aid });
+        }
+      } finally {
+        publishSpy.mockRestore();
+      }
+    });
+  });
+
   // ─── PROGRESO ──────────────────────────────────────────
   describe('Progress', () => {
     test('GET /:patientId/progress returns achievements and trends', async () => {

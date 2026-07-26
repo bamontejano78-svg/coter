@@ -537,7 +537,7 @@
       nav.appendChild(nextBtn);
       var dots = el('div', { className: 'iw-nav-dots' });
       for (var i = 0; i <= 7; i++) {
-        dots.appendChild(el('span', { className: 'iw-nav-dot' + (i === data.step ? ' active' : i < data.step ? ' done' : '') }, 'aria-label': 'Paso ' + (i + 1) + ' de 8' + (i === data.step ? ' (actual)' : i < data.step ? ' (completado)' : '') }));
+        dots.appendChild(el('span', { className: 'iw-nav-dot' + (i === data.step ? ' active' : i < data.step ? ' done' : ''), 'aria-label': 'Paso ' + (i + 1) + ' de 8' + (i === data.step ? ' (actual)' : i < data.step ? ' (completado)' : '') }));
       }
       nav.appendChild(dots);
       mount.appendChild(nav);
