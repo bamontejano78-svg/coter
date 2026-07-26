@@ -139,7 +139,7 @@ jobs:
 
       # ── Paso 2: Security scan con Trivy (informativo, no bloqueante) ──
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           image-ref: ${{ env.REGISTRY }}/${{ github.repository }}:main
