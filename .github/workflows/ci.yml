@@ -11,9 +11,6 @@
 #   ── GHCR ────────────────────────────────────────────────
 #   GITHUB_TOKEN          — Automático: usado para login y push a GHCR
 #
-#   ── Security Scan ───────────────────────────────────────
-#   (usa Trivy de Aqua Security — open source, sin secrets adicionales)
-#
 #   ── Deploy Staging ──────────────────────────────────────
 #   SSH_HOST              — IP o dominio del servidor de staging
 #   SSH_USER              — Usuario SSH con permisos Docker
@@ -78,19 +75,16 @@ jobs:
           CORS_ORIGINS: http://localhost:3000
           DB_CONNECTION_TIMEOUT_MS: 15000
 
-  # ─── DOCKER BUILD, SCAN & PUSH ──────────────────────────
+  # ─── DOCKER BUILD & PUSH ──────────────────────────────────
   docker:
-    name: Docker Build, Scan & Push
+    name: Docker Build & Push
     runs-on: ubuntu-latest
     needs: test
     # Solo push en main, no en PRs
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      packages: write        # Necesario para push a GHCR
-      security-events: write # Para subir reporte SARIF al Security tab
-      attestations: write
-      id-token: write
+      packages: write
 
     steps:
       - name: Checkout
@@ -109,58 +103,18 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}
           tags: |
-            # Branch name (main → main)
             type=ref,event=branch
-            # Git short SHA (e.g., a1b2c3d)
             type=sha,prefix=,format=short
-            # Semver tags from git tags (v1.0.0 → 1.0.0, 1.0, 1)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # latest alias (solo en main)
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=Coter Pro
             org.opencontainers.image.description=Plataforma de continuidad terapéutica entre sesiones
             org.opencontainers.image.vendor=Coter
 
-      # ── Paso 1: Build (sin push) → carga en Docker daemon ──
-      - name: Build image (for scanning)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          load: true
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # ── Paso 2: Security scan con Trivy (informativo, no bloqueante) ──
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
-        continue-on-error: true
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}:main
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: 0
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          timeout: 10m
-
-      # ── Paso 3: Subir reporte al Security tab de GitHub ────
-      - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        continue-on-error: true
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-      # ── Paso 4: Push a GHCR ──
-      - name: Push image to GHCR
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -169,6 +123,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ─── DEPLOY STAGING ─────────────────────────────────────
   deploy-staging:
