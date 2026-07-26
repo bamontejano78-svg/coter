@@ -1659,8 +1659,8 @@ describe('Migration 007 — Embedded Clinical Exercises seed', () => {
     const { rows } = await pool.query(
       "SELECT exercise_kind, COUNT(*) AS count FROM task_templates WHERE exercise_kind = 'classic' GROUP BY exercise_kind"
     );
-    expect(rows.length).toBe(1);
-    expect(parseInt(rows[0].count)).toBeGreaterThanOrEqual(18);
+    const classicCount = rows.length > 0 ? parseInt(rows[0].count) : 0;
+    expect(classicCount).toBeGreaterThanOrEqual(18);
   });
 
   test('CHECK constraint on task_templates rejects invalid exercise_kind', async () => {
