@@ -678,12 +678,18 @@ function renderTemplates(){
     // formulario interactivo (TR/BA/GE con respuestas encriptadas).
     const kindBadgeText = templateKindBadge(t);
     const kindBadge = kindBadgeText ? '<span class="clinical-kind-badge">' + sanitizeHTML(kindBadgeText) + '</span>' : '';
+    const hasWidget = window.InteractiveWidgets && window.InteractiveWidgets.isWidgetTemplate(t.title, t.category);
+    const previewBtn = hasWidget
+      ? `<button class="btn btn-p btn-sm btn-preview-widget" data-template-id="${t.id}">👁️ Previsualizar</button>`
+      : '';
     const actionButtons=isCustom
       ?`<button class="btn btn-p btn-sm btn-toggle-template" data-template-id="${t.id}">📖 Ver</button>
          <button class="btn btn-w btn-sm btn-edit-template" data-template-id="${t.id}">✏️ Editar</button>
          <button class="btn btn-d btn-sm btn-delete-template" data-template-id="${t.id}">🗑️ Eliminar</button>
+         ${previewBtn}
          <button class="btn btn-s btn-sm btn-assign-template" data-template-id="${t.id}">📋 Asignar</button>`
       :`<button class="btn btn-p btn-sm btn-toggle-template" data-template-id="${t.id}">📖 Ver instrucciones</button>
+         ${previewBtn}
          <button class="btn btn-s btn-sm btn-assign-template" data-template-id="${t.id}">📋 Asignar a paciente</button>`;
     return`<div class="${cardClass}" id="tcard-${t.id}" style="animation-delay:${i*.05}s">
       <div class="template-category">${sanitizeHTML(t.category)}${customBadge}${kindBadge}</div>
@@ -703,6 +709,88 @@ function toggleTemplate(id){
   card.classList.toggle('expanded');
   const btn=card.querySelector('.btn-p');
   btn.textContent=card.classList.contains('expanded')?'🔼 Ocultar':'📖 Ver instrucciones';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PREVISUALIZACIÓN DE WIDGETS INTERACTIVOS
+// ═══════════════════════════════════════════════════════════════
+// Renderiza el widget en un modal de preview con datos mock para que
+// el terapeuta pueda ver cómo se verá para el paciente antes de asignarlo.
+function previewWidget(templateId){
+  var template = templates.find(function(t){ return t.id === templateId; });
+  if (!template) return;
+  if (!window.InteractiveWidgets || !window.InteractiveWidgets.isWidgetTemplate(template.title, template.category)) return;
+
+  // Crear overlay del modal
+  var overlay = document.createElement('div');
+  overlay.className = 'widget-preview-overlay';
+  overlay.id = 'widgetPreviewOverlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'Previsualización: ' + template.title);
+
+  overlay.innerHTML = '<div class="widget-preview-modal">'
+    + '<div class="widget-preview-header">'
+    + '<div class="widget-preview-title">👁️ ' + sanitizeHTML(template.title) + '</div>'
+    + '<div class="widget-preview-subtitle">Vista previa como la verá el paciente</div>'
+    + '<button class="widget-preview-close" aria-label="Cerrar previsualización" title="Cerrar">✕</button>'
+    + '</div>'
+    + '<div class="widget-preview-body" id="widgetPreviewBody">'
+    + '<div class="widget-preview-loading"><div class="skel-row"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div><div class="skel-row"><div class="skeleton skeleton-card"></div></div></div>'
+    + '</div>'
+    + '<div class="widget-preview-footer">'
+    + '<span class="widget-preview-hint">💡 Esta previsualización usa datos de ejemplo. Las respuestas no se guardan.</span>'
+    + '<button class="btn btn-s btn-sm" id="btnClosePreview">Cerrar previsualización</button>'
+    + '</div>'
+    + '</div>';
+
+  document.body.appendChild(overlay);
+
+  // Foco en el botón de cierre para navegación por teclado
+  var closeBtn = overlay.querySelector('.widget-preview-close');
+  var prevFocused = document.activeElement;
+  if (closeBtn) closeBtn.focus();
+
+  // Cerrar con botón, overlay click o Escape
+  function closePreview(){
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    document.removeEventListener('keydown', onKeyDown);
+    // Devolver el foco al elemento que abrió el modal
+    if (prevFocused && typeof prevFocused.focus === 'function') {
+      try { prevFocused.focus(); } catch (e) {}
+    }
+  }
+  function onKeyDown(e){ if (e.key === 'Escape') closePreview(); }
+  overlay.addEventListener('click', function(e){
+    if (e.target === overlay) closePreview();
+  });
+  overlay.querySelector('.widget-preview-close').addEventListener('click', closePreview);
+  overlay.querySelector('#btnClosePreview').addEventListener('click', closePreview);
+  document.addEventListener('keydown', onKeyDown);
+
+  // Crear un assignment falso con datos mock para el widget
+  var mockAssignment = {
+    id: 'preview_' + templateId,
+    title: template.title,
+    instructions: template.instructions || '',
+    exercise_kind: template.exercise_kind || 'classic',
+    status: 'assigned'
+  };
+
+  // Pequeño delay para que se vea el skeleton loader antes de renderizar
+  setTimeout(function(){
+    var body = document.getElementById('widgetPreviewBody');
+    if (!body) return;
+    try {
+      // Limpiar cualquier estado previo del widget en localStorage
+      window.InteractiveWidgets.clearWidgetState('preview_' + templateId);
+      // Renderizar el widget
+      window.InteractiveWidgets.render(body, mockAssignment, { preview: true });
+    } catch (e) {
+      console.error('[previewWidget] Error al renderizar:', e);
+      body.innerHTML = '<p class="empty-msg error">Error al cargar la previsualización. Inténtalo de nuevo.</p>';
+    }
+  }, 300);
 }
 
 async function assignTemplateToPatient(templateId){
@@ -1855,6 +1943,8 @@ document.addEventListener('click', function(e){
   if (delTmpl) { deleteCustomTemplate(delTmpl.dataset.templateId); return; }
   const assignTmpl = e.target.closest('.btn-assign-template');
   if (assignTmpl) { assignTemplateToPatient(assignTmpl.dataset.templateId); return; }
+  const previewBtn = e.target.closest('.btn-preview-widget');
+  if (previewBtn) { previewWidget(previewBtn.dataset.templateId); return; }
   
   // Category chips
   const chip = e.target.closest('.category-chip[data-category]');
