@@ -162,7 +162,9 @@ async function seedSampleData() {
 
 async function seedTaskTemplates() {
   const p = getPool();
-  const { rows } = await p.query('SELECT COUNT(*) as count FROM task_templates');
+  // Solo saltar si YA hay templates classic (evita duplicar en re-inits),
+  // pero NO salta si solo hay clinical templates de la migración 007.
+  const { rows } = await p.query("SELECT COUNT(*) as count FROM task_templates WHERE exercise_kind = 'classic'");
   if (parseInt(rows[0].count) > 0) return;
 
   for (let i = 0; i < DEFAULT_TASK_TEMPLATES.length; i += 5) {
