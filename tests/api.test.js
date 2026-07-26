@@ -1,6 +1,9 @@
 // Tests para Coter Pro
 // Ejecutar: npm test
 
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+
 const request = require('supertest');
 const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
