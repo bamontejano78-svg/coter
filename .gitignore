@@ -61,3 +61,9 @@ certs/
 *.temp
 nul
 Nuevo documento de texto.txt
+
+# CI log artifacts (downloaded from GitHub Actions)
+run*-jobs.json
+run*-logs.zip
+latest-run.json
+test-job-logs.zip
