@@ -750,4 +750,84 @@ router.post('/:patientId/sessions/:sid/complete', async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════
+// WIDGET SESSIONS — Guardado de respuestas de widgets interactivos
+// ══════════════════════════════════════════════════════════════════
+//
+// Flujo para widgets (mini-apps interactivas en templates classic):
+//   POST /widget-complete
+//     Crea una exercise_sessions con is_complete=true, responses = widget
+//     data, y marca el assignment como completado en una sola llamada.
+//     A diferencia de las sesiones clínicas (start → autosave → complete),
+//     los widgets guardan todo al terminar (sin autosave intermedio).
+//
+// Body: { assignment_id, exercise_kind, widget_responses }
+//   - assignment_id: UUID del assignment
+//   - exercise_kind: string descriptivo (ej: 'widget_thought_record_lite')
+//   - widget_responses: objeto plano con los datos del widget
+
+router.post('/:patientId/widget-complete', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const { assignment_id, exercise_kind, widget_responses } = req.body || {};
+
+    if (!assignment_id) return res.status(400).json({ error: 'assignment_id requerido' });
+    if (!exercise_kind) return res.status(400).json({ error: 'exercise_kind requerido' });
+
+    const pool = getPool();
+
+    // Verificar que la tarea existe y pertenece al paciente
+    const { rows: aRows } = await pool.query(
+      `SELECT id, status FROM assignments WHERE id = $1 AND patient_id = $2`,
+      [assignment_id, patientId]
+    );
+    if (aRows.length === 0) return res.status(404).json({ error: 'Tarea no encontrada' });
+    if (aRows[0].status !== 'assigned') {
+      return res.status(400).json({ error: 'La tarea ya está finalizada' });
+    }
+
+    const sessionId = uuidv4();
+    const responses = widget_responses && typeof widget_responses === 'object' && !Array.isArray(widget_responses)
+      ? widget_responses
+      : {};
+
+    // Crear sesión ya completada con las respuestas del widget
+    await pool.query(
+      `INSERT INTO exercise_sessions (id, assignment_id, patient_id, exercise_kind, responses, is_complete, completed_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, TRUE, NOW())`,
+      [sessionId, assignment_id, patientId, exercise_kind, JSON.stringify(responses)]
+    );
+
+    // Marcar assignment como completado
+    await pool.query(
+      `UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1`,
+      [assignment_id]
+    );
+
+    audit({ who: patientId, role: 'patient', action: 'complete_widget_session', resource: 'exercise_session', resourceId: sessionId, ip: req.ip, metadata: { assignmentId: assignment_id, exerciseKind: exercise_kind } });
+
+    // Notificar al terapeuta
+    const { rows: connRows } = await pool.query(
+      `SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'`,
+      [patientId]
+    );
+    if (connRows.length > 0) {
+      bus.publish(bus.topicFor('therapist', connRows[0].therapist_id), 'task:completed', {
+        patientId, assignmentId: assignment_id,
+      });
+    }
+
+    res.json({
+      success: true,
+      session_id: sessionId,
+      assignment_id: assignment_id,
+      exercise_kind: exercise_kind,
+      completed_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.error('Error completando widget session', { error: err.message });
+    res.status(500).json({ error: 'Error al guardar el ejercicio' });
+  }
+});
+
 module.exports = router;

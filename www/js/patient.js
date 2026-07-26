@@ -293,6 +293,52 @@ async function loadTasks(){
         }else{
           formMount.textContent='(Cargando formulario clínico…)';
         }
+      }else if(window.InteractiveWidgets && window.InteractiveWidgets.isWidgetTemplate(t.title, t.category)){
+        // Widget interactivo: mini-app guiada para este ejercicio clásico
+        var widgetMount=document.createElement('div');
+        widgetMount.className='iw-widget-mount';
+        card.appendChild(widgetMount);
+        if(typeof window.InteractiveWidgets.render==='function'){
+          window.InteractiveWidgets.render(widgetMount, t, {
+            patientId: patientId, authToken: authToken, apiBase: API,
+            onCompleted: function(data){
+              // Guardar respuestas del widget en el backend y marcar como completada
+              var widgetKind = window.InteractiveWidgets.getWidgetKind
+                ? window.InteractiveWidgets.getWidgetKind(t.title)
+                : 'widget_unknown';
+              authFetch(API + '/patients/' + patientId + '/widget-complete', {
+                method: 'POST',
+                body: JSON.stringify({
+                  assignment_id: t.id,
+                  exercise_kind: widgetKind,
+                  widget_responses: data
+                })
+              }).then(function(r){
+                if(r.ok){
+                  // Limpiar localStorage solo tras guardado exitoso
+                  if(window.InteractiveWidgets.clearWidgetState){
+                    window.InteractiveWidgets.clearWidgetState(t.id);
+                  }
+                  toastMsg('🎉 ¡Ejercicio completado y guardado!');
+                  loadTasks(); loadStats();
+                }else{
+                  // Fallback: al menos marcar como completada
+                  fallbackComplete();
+                  toastMsg('⚠️ Ejercicio completado, pero las respuestas no se guardaron en el servidor', 'error');
+                }
+              }).catch(function(){
+                fallbackComplete();
+                toastMsg('⚠️ Sin conexión. El ejercicio se completó pero no se sincronizó', 'error');
+              });
+
+              function fallbackComplete(){
+                authFetch(API + '/patients/' + patientId + '/assignments/' + t.id, {method:'PUT',body:JSON.stringify({completed:true})})
+                  .then(function(){ loadTasks(); loadStats(); })
+                  .catch(function(){});
+              }
+            }
+          });
+        }
       }else{
         const btn=document.createElement('button');
         btn.className='btn btn-s btn-complete-task';
