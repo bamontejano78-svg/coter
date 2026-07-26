@@ -67,3 +67,8 @@ run*-jobs.json
 run*-logs.zip
 latest-run.json
 test-job-logs.zip
+
+# Docs & utility scripts (not part of the app)
+*.pdf
+scripts/setup-gh-secrets.js
+scripts/setup-ssh-secrets.js
