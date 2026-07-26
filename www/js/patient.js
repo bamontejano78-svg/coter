@@ -72,6 +72,21 @@ async function loadEverything(){
   setInterval(loadStats,30000);
   setInterval(loadProgress,60000);
   connectSSE();
+
+  // Inicializar notificaciones push nativas (Capacitor)
+  try {
+    if (window.CoterPush && typeof window.CoterPush.init === 'function') {
+      window.CoterPush.init({
+        apiBase: API,
+        onToken: function (token) { console.log('[patient] FCM token:', token); },
+        onNotification: function (data) {
+          if (data && data.source === 'tap') { loadMessages(); loadTasks(); }
+        }
+      });
+    }
+  } catch (e) {
+    console.warn('[patient] Push notifications not available:', e.message);
+  }
 }
 
 // ─── SSE — Real-time stream ───────────────────────────────────────────
