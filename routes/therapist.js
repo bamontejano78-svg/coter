@@ -28,6 +28,7 @@ const { createStripeCustomer } = require('../utils/stripe');
 const { SCALE_KINDS, scoreResponses, getScoreHistory } = require('../utils/clinicalScales');
 const { getAlerts, getUnreadAlerts, markAlertsRead, updateAlertStatus } = require('../utils/clinicalAlerts');
 const { COOKIE_NAMES, getCookie, setTherapistCookies, clearTherapistCookies } = require('../utils/cookies');
+const fcm = require('../utils/fcm');
 
 // ─── Email transporter (lazy init) ──────────────────────────────
 let mailTransporter = null;
@@ -855,6 +856,12 @@ router.post('/patients/:patientId/messages', authWithBilling, async (req, res) =
       patientId, messageId: msgId, from: 'therapist',
     });
 
+    // Push notification nativa (FCM) — best-effort, no bloquea la respuesta
+    fcm.sendToPatient(patientId, {
+      title: 'Nuevo mensaje de tu terapeuta',
+      body: preview,
+    }).catch(err => logger.warn('[Push] Error enviando push de mensaje', { error: err.message, patientId }));
+
     res.json({ success: true, message_id: msgId });
   } catch (err) {
     logger.error('Error enviando mensaje', { error: err.message });
@@ -944,6 +951,12 @@ router.post('/patients/:patientId/assignments', authWithBilling, async (req, res
     bus.publish(bus.topicFor('patient', patientId), 'task:assigned', {
       patientId, assignmentId: assignId, title, type, due_date: due_date || null,
     });
+
+    // Push notification nativa (FCM)
+    fcm.sendToPatient(patientId, {
+      title: 'Nueva tarea asignada',
+      body: '"' + title + '"' + dueMsg,
+    }).catch(err => logger.warn('[Push] Error push de tarea', { error: err.message, patientId }));
 
     res.json({ success: true, assignment_id: assignId });
   } catch (err) {
