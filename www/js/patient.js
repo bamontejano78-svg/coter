@@ -77,6 +77,7 @@ async function loadEverything(){
   try {
     if (window.CoterPush && typeof window.CoterPush.init === 'function') {
       window.CoterPush.init({
+        patientId: patientId,
         apiBase: API,
         onToken: function (token) { console.log('[patient] FCM token:', token); },
         onNotification: function (data) {

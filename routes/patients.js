@@ -414,6 +414,33 @@ function calcStreak(checkIns) {
   return streak;
 }
 
+// ─── PUSH TOKENS (FCM) ──────────────────────────────────────
+// Registra el token FCM del dispositivo para recibir push notifications.
+// Llamado por CoterPush.init() en el frontend tras obtener el token de Firebase.
+router.post('/:patientId/push-token', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const { token, platform } = req.body || {};
+
+    if (!token) return res.status(400).json({ error: 'token requerido' });
+
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO push_tokens (patient_id, token, platform)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (patient_id, token)
+       DO UPDATE SET platform = $3, updated_at = NOW()`,
+      [patientId, token, platform || 'android']
+    );
+
+    logger.info('[Push] Token FCM registrado', { patientId, platform: platform || 'android' });
+    res.json({ success: true, message: 'Token registrado' });
+  } catch (err) {
+    logger.error('[Push] Error registrando token FCM', { error: err.message });
+    res.status(500).json({ error: 'Error al registrar token' });
+  }
+});
+
 // ─── NOTIFICACIONES ──────────────────────────────────────────
 router.get('/:patientId/notifications', async (req, res) => {
   try {

@@ -68,6 +68,10 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || null;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || null;
 
+// ─── Firebase Cloud Messaging ────────────────────────────────────
+const FCM_SERVER_KEY = process.env.FCM_SERVER_KEY || null;
+const FCM_SENDER_ID = process.env.FCM_SENDER_ID || null;
+
 const warnings = [];
 const errors = [];
 
@@ -153,4 +157,6 @@ module.exports = {
   STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET,
   STRIPE_PRICE_ID,
+  FCM_SERVER_KEY,
+  FCM_SENDER_ID,
 };

@@ -25,6 +25,9 @@
 
   var isNative = Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform();
 
+  // FCM Sender ID del proyecto Firebase coterpro
+  var FCM_SENDER_ID = '396430726535';
+
   /**
    * Inicializa el sistema de notificaciones push.
    * @param {Object} opts
@@ -37,6 +40,8 @@
     var onToken = opts.onToken || null;
     var onNotification = opts.onNotification || null;
     var apiBase = opts.apiBase || '/api/v1';
+
+    var patientId = opts.patientId || null;
 
     if (!isNative) {
       console.log('[CoterPush] No es plataforma nativa — notificaciones push no disponibles');
@@ -72,8 +77,8 @@
       console.log('[CoterPush] Token FCM recibido:', data.value);
       if (onToken) onToken(data.value);
 
-      // Registrar token en el backend
-      registerTokenOnServer(data.value, apiBase);
+      // Registrar token en el backend (pasando patientId directamente)
+      registerTokenOnServer(data.value, apiBase, patientId);
     });
 
     // Error de registro
@@ -97,28 +102,42 @@
   /**
    * Registra el token FCM en el backend para que el servidor pueda enviar notificaciones.
    */
-  async function registerTokenOnServer(token, apiBase) {
+  /**
+   * Registra el token FCM en el backend.
+   * @param {string} token — FCM registration token
+   * @param {string} apiBase — URL base de la API
+   * @param {string|null} patientId — ID del paciente (pasado desde opts o extraído de localStorage)
+   */
+  async function registerTokenOnServer(token, apiBase, patientId) {
     try {
-      var patient = null;
-      try {
-        patient = JSON.parse(localStorage.getItem('coter_patient') || '{}');
-      } catch (e) {}
+      // Si no se pasó patientId explícitamente, intentar extraerlo de localStorage
+      if (!patientId) {
+        try {
+          var stored = JSON.parse(localStorage.getItem('patientConnection') || '{}');
+          patientId = stored.patient_id || null;
+        } catch (e) {}
+      }
 
-      if (patient && patient.patient_id) {
-        var r = await fetch(apiBase + '/patients/' + patient.patient_id + '/push-token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: token, platform: 'android' }),
-          credentials: 'include'
-        });
-        if (r.ok) {
-          console.log('[CoterPush] Token registrado en el servidor');
-        }
+      if (!patientId) {
+        console.warn('[CoterPush] No se pudo registrar token: patientId no disponible');
+        return;
+      }
+
+      var r = await fetch(apiBase + '/patients/' + patientId + '/push-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token, platform: 'android' }),
+        credentials: 'include'
+      });
+      if (r.ok) {
+        console.log('[CoterPush] Token registrado en el servidor');
+      } else {
+        console.warn('[CoterPush] Error del servidor al registrar token:', r.status);
       }
     } catch (e) {
       console.warn('[CoterPush] Error registrando token en servidor:', e);
     }
   }
 
-  window.CoterPush = { init: init };
+  window.CoterPush = { init: init, SENDER_ID: FCM_SENDER_ID };
 })();
