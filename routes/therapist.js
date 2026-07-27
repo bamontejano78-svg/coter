@@ -1945,4 +1945,30 @@ router.delete('/patients/:patientId/clinical-sessions/:sessionId', authWithBilli
   }
 });
 
+// ─── PUSH TOKENS (FCM) ──────────────────────────────────────
+// Registra el token FCM del dispositivo del terapeuta para recibir
+// notificaciones push cuando un paciente envía mensajes.
+// Llamado por CoterPush.init() en el frontend tras obtener el token.
+router.post('/push-token', authWithBilling, async (req, res) => {
+  try {
+    const { token, platform } = req.body || {};
+    if (!token) return res.status(400).json({ error: 'token requerido' });
+
+    const pool = getPool();
+    await pool.query(
+      `INSERT INTO push_tokens (therapist_id, token, platform)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (COALESCE(patient_id::text, therapist_id::text), token)
+       DO UPDATE SET platform = $3, updated_at = NOW()`,
+      [req.user.id, token, platform || 'android']
+    );
+
+    logger.info('[Push] Token FCM registrado para terapeuta', { therapistId: req.user.id, platform: platform || 'android' });
+    res.json({ success: true, message: 'Token registrado' });
+  } catch (err) {
+    logger.error('[Push] Error registrando token FCM de terapeuta', { error: err.message });
+    res.status(500).json({ error: 'Error al registrar token' });
+  }
+});
+
 module.exports = router;

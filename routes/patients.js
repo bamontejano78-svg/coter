@@ -10,6 +10,7 @@ const { audit, auditAccess, auditChange } = require('../utils/audit');
 const logger = require('../config/logger');
 const bus = require('../utils/eventBus');
 const { setPatientCookie, clearPatientCookie } = require('../utils/cookies');
+const fcm = require('../utils/fcm');
 const { getSchema, validateResponses } = require('../utils/exerciseSchemas');
 const { encryptFieldsForKind, decryptFieldsForKind } = require('../utils/exerciseEncryption');
 // Helpers compartidos con routes/therapist.js para resolver schema y mergear
@@ -199,6 +200,12 @@ router.post('/:patientId/messages', async (req, res) => {
     bus.publish(bus.topicFor('patient', patientId), 'message:new', {
       patientId, messageId, from: 'patient',
     });
+
+    // Push notification nativa (FCM) al terapeuta — best-effort
+    fcm.sendToTherapist(therapistId, {
+      title: 'Nuevo mensaje de tu paciente',
+      body: message.length > 80 ? message.substring(0, 80) + '...' : message,
+    }).catch(err => logger.warn('[Push] Error enviando push al terapeuta', { error: err.message, therapistId }));
 
     res.json({ success: true, message_id: messageId, message: 'Mensaje enviado' });
   } catch (err) {
@@ -428,7 +435,7 @@ router.post('/:patientId/push-token', async (req, res) => {
     await pool.query(
       `INSERT INTO push_tokens (patient_id, token, platform)
        VALUES ($1, $2, $3)
-       ON CONFLICT (patient_id, token)
+       ON CONFLICT (COALESCE(patient_id::text, therapist_id::text), token)
        DO UPDATE SET platform = $3, updated_at = NOW()`,
       [patientId, token, platform || 'android']
     );

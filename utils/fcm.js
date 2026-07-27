@@ -135,4 +135,50 @@ function sendToOne(token, { title, body, data }, opts = {}) {
   });
 }
 
-module.exports = { sendToPatient, sendToOne };
+/**
+ * Envía una notificación push a todos los dispositivos registrados
+ * de un terapeuta.
+ *
+ * @param {string} therapistId — UUID del terapeuta
+ * @param {Object} notification — { title, body, data? }
+ * @param {Object} opts — Opciones adicionales
+ * @returns {Promise<{sent: number, failed: number}>}
+ */
+async function sendToTherapist(therapistId, notification, opts = {}) {
+  if (!config.FCM_SERVER_KEY) {
+    logger.warn('[FCM] FCM_SERVER_KEY no configurado — notificación push no enviada');
+    return { sent: 0, failed: 0, skipped: true };
+  }
+
+  const pool = getPool();
+  const { rows: tokens } = await pool.query(
+    'SELECT token, platform FROM push_tokens WHERE therapist_id = $1',
+    [therapistId]
+  ).catch(err => {
+    logger.error('[FCM] Error consultando push_tokens (therapist)', { error: err.message, therapistId });
+    return { rows: [] };
+  });
+
+  if (!tokens.length) {
+    logger.debug('[FCM] No hay tokens registrados para el terapeuta', { therapistId });
+    return { sent: 0, failed: 0 };
+  }
+
+  const { title, body, data } = notification;
+  let sent = 0;
+  let failed = 0;
+
+  for (const { token } of tokens) {
+    try {
+      await sendToOne(token, { title, body, data }, opts);
+      sent++;
+    } catch (err) {
+      logger.warn('[FCM] Error enviando push a token de terapeuta', { error: err.message, therapistId });
+      failed++;
+    }
+  }
+
+  return { sent, failed };
+}
+
+module.exports = { sendToPatient, sendToTherapist, sendToOne };
