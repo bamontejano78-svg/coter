@@ -130,6 +130,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ─── DEPLOY STAGING ─────────────────────────────────────
+  # Salta con warning si los secrets SSH no están configurados.
+  # Para deploy local: ejecuta scripts/deploy-staging-local.sh
   deploy-staging:
     name: Deploy Staging
     runs-on: ubuntu-latest
@@ -140,7 +142,19 @@ jobs:
       url: https://coter.app
 
     steps:
+      - name: Check SSH availability
+        id: check-ssh
+        run: |
+          if [ -z "${{ secrets.SSH_HOST }}" ]; then
+            echo "ssh_available=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️  SSH_HOST no configurado — saltando deploy remoto"
+            echo "💡 Ejecuta scripts/deploy-staging-local.sh en tu máquina para deploy local"
+          else
+            echo "ssh_available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy via SSH
+        if: steps.check-ssh.outputs.ssh_available == 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
