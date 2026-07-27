@@ -586,7 +586,7 @@ router.get('/patients/:patientId/pre-session', authWithBilling, async (req, res)
 
     // ── 1. Última nota clínica (proxy de "última sesión") ──────
     const { rows: lastNoteRows } = await pool.query(
-      'SELECT created_at FROM clinical_notes WHERE patient_id = $1 AND therapist_id = $2 ORDER BY created_at DESC LIMIT 1',
+      'SELECT session_date FROM clinical_sessions WHERE patient_id = $1 AND therapist_id = $2 ORDER BY session_date DESC LIMIT 1',
       [patientId, req.user.id]
     );
     const lastSessionDate = lastNoteRows.length > 0 ? lastNoteRows[0].created_at : null;
@@ -1078,6 +1078,23 @@ router.get('/calendar', authWithBilling, async (req, res) => {
   }
 });
 
+// GET single session for efficient edit
+router.get('/patients/:patientId/clinical-sessions/:sessionId', authWithBilling, async (req, res) => {
+  try {
+    const { patientId, sessionId } = req.params;
+    const pool = getPool();
+    const { rows } = await pool.query(
+      'SELECT * FROM clinical_sessions WHERE id = $1 AND patient_id = $2 AND therapist_id = $3',
+      [sessionId, patientId, req.user.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ success: false, error: 'Sesión no encontrada' });
+    res.json({ success: true, session: rows[0] });
+  } catch (err) {
+    logger.error('Error cargando sesión', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
 // ─── NOTAS CLINICAS ───────────────────────────────────────────
 router.get('/patients/:patientId/clinical-notes', authWithBilling, async (req, res) => {
   try {
@@ -1103,7 +1120,7 @@ router.get('/patients/:patientId/clinical-notes', authWithBilling, async (req, r
 router.post('/patients/:patientId/clinical-notes', authWithBilling, async (req, res) => {
   try {
     const { patientId } = req.params;
-    const { subjective, objective, assessment, plan } = req.body;
+    const { subjective, objective, assessment, plan, session_id } = req.body;
     if (!subjective && !objective && !assessment && !plan) {
       return res.status(400).json({ success: false, error: 'Al menos un campo SOAP requerido' });
     }
@@ -1116,8 +1133,8 @@ router.post('/patients/:patientId/clinical-notes', authWithBilling, async (req, 
 
     const id = uuidv4();
     await pool.query(
-      'INSERT INTO clinical_notes (id, patient_id, therapist_id, subjective, objective, assessment, plan) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [id, patientId, req.user.id, subjective || null, objective || null, assessment || null, plan || null]
+      'INSERT INTO clinical_notes (id, patient_id, therapist_id, subjective, objective, assessment, plan, session_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+      [id, patientId, req.user.id, subjective || null, objective || null, assessment || null, plan || null, session_id || null]
     );
     const { rows: noteRows } = await pool.query('SELECT * FROM clinical_notes WHERE id = $1', [id]);
     auditChange(req, 'create_clinical_note', 'clinical_note', id, { patientId });
@@ -1138,7 +1155,7 @@ router.post('/patients/:patientId/clinical-notes', authWithBilling, async (req, 
 router.put('/patients/:patientId/clinical-notes/:noteId', authWithBilling, async (req, res) => {
   try {
     const { patientId, noteId } = req.params;
-    const { subjective, objective, assessment, plan } = req.body;
+    const { subjective, objective, assessment, plan, session_id } = req.body;
     const pool = getPool();
     const { rows: noteRows } = await pool.query(
       'SELECT * FROM clinical_notes WHERE id = $1 AND patient_id = $2 AND therapist_id = $3',
@@ -1152,10 +1169,11 @@ router.put('/patients/:patientId/clinical-notes/:noteId', authWithBilling, async
       objective: objective !== undefined ? (objective || null) : note.objective,
       assessment: assessment !== undefined ? (assessment || null) : note.assessment,
       plan: plan !== undefined ? (plan || null) : note.plan,
+      session_id: session_id !== undefined ? (session_id || null) : note.session_id,
     };
     await pool.query(
-      "UPDATE clinical_notes SET subjective=$1, objective=$2, assessment=$3, plan=$4, updated_at=NOW() WHERE id=$5 AND therapist_id=$6",
-      [fields.subjective, fields.objective, fields.assessment, fields.plan, noteId, req.user.id]
+      "UPDATE clinical_notes SET subjective=$1, objective=$2, assessment=$3, plan=$4, session_id=$5, updated_at=NOW() WHERE id=$6 AND therapist_id=$7",
+      [fields.subjective, fields.objective, fields.assessment, fields.plan, fields.session_id, noteId, req.user.id]
     );
     auditChange(req, 'update_clinical_note', 'clinical_note', noteId, { patientId });
     res.json({ success: true, note: { ...note, ...fields, updated_at: new Date().toISOString() } });
@@ -1779,5 +1797,139 @@ function generateCSV(patient, checkIns, messages, assignments, goals) {
   goals.forEach(g => csv += g.title + ',' + g.metric + ',' + g.current_value + ',' + g.target_value + ',' + g.status + '\n');
   return csv;
 }
+
+// ─── SESIONES CLÍNICAS ────────────────────────────────────────
+// Registro estructurado de sesiones clínicas con notas SOAP vinculadas.
+// GET    /patients/:patientId/clinical-sessions
+// POST   /patients/:patientId/clinical-sessions
+// PUT    /patients/:patientId/clinical-sessions/:sessionId
+// DELETE /patients/:patientId/clinical-sessions/:sessionId
+
+router.get('/patients/:patientId/clinical-sessions', authWithBilling, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const pool = getPool();
+
+    const { rows: connRows } = await pool.query(
+      "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2",
+      [req.user.id, patientId]
+    );
+    if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    const { rows: sessions } = await pool.query(
+      `SELECT s.*,
+        (SELECT json_agg(json_build_object(
+          'id', n.id, 'subjective', n.subjective, 'objective', n.objective,
+          'assessment', n.assessment, 'plan', n.plan,
+          'created_at', n.created_at, 'updated_at', n.updated_at
+        ) ORDER BY n.created_at DESC)
+         FROM clinical_notes n WHERE n.session_id = s.id) as notes
+       FROM clinical_sessions s
+       WHERE s.patient_id = $1 AND s.therapist_id = $2
+       ORDER BY s.session_date DESC`,
+      [patientId, req.user.id]
+    );
+
+    res.json({ success: true, sessions: sessions.map(s => ({ ...s, notes: s.notes || [] })) });
+  } catch (err) {
+    logger.error('Error cargando sesiones clínicas', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
+router.post('/patients/:patientId/clinical-sessions', authWithBilling, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const { session_date, duration_min, type, status, notes_summary } = req.body || {};
+
+    const pool = getPool();
+    const { rows: connRows } = await pool.query(
+      "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
+      [req.user.id, patientId]
+    );
+    if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO clinical_sessions (id, patient_id, therapist_id, session_date, duration_min, type, status, notes_summary)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id, patientId, req.user.id,
+        session_date || new Date().toISOString(),
+        duration_min || null,
+        type || 'presencial',
+        status || 'completed',
+        notes_summary || null,
+      ]
+    );
+
+    const { rows: sessionRows } = await pool.query('SELECT * FROM clinical_sessions WHERE id = $1', [id]);
+    auditChange(req, 'create_clinical_session', 'clinical_session', id, { patientId, type });
+
+    bus.publish(bus.topicFor('therapist', req.user.id), 'session:created', { patientId, sessionId: id });
+
+    res.json({ success: true, session: sessionRows[0] });
+  } catch (err) {
+    logger.error('Error creando sesión clínica', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
+router.put('/patients/:patientId/clinical-sessions/:sessionId', authWithBilling, async (req, res) => {
+  try {
+    const { patientId, sessionId } = req.params;
+    const { session_date, duration_min, type, status, notes_summary } = req.body || {};
+    const pool = getPool();
+
+    const { rows: sessRows } = await pool.query(
+      'SELECT * FROM clinical_sessions WHERE id = $1 AND patient_id = $2 AND therapist_id = $3',
+      [sessionId, patientId, req.user.id]
+    );
+    if (sessRows.length === 0) return res.status(404).json({ success: false, error: 'Sesión no encontrada' });
+
+    const sess = sessRows[0];
+    const fields = {
+      session_date: session_date !== undefined ? session_date : sess.session_date,
+      duration_min: duration_min !== undefined ? duration_min : sess.duration_min,
+      type: type !== undefined ? type : sess.type,
+      status: status !== undefined ? status : sess.status,
+      notes_summary: notes_summary !== undefined ? notes_summary : sess.notes_summary,
+    };
+
+    await pool.query(
+      `UPDATE clinical_sessions SET session_date=$1, duration_min=$2, type=$3, status=$4, notes_summary=$5, updated_at=NOW()
+       WHERE id=$6 AND therapist_id=$7`,
+      [fields.session_date, fields.duration_min, fields.type, fields.status, fields.notes_summary, sessionId, req.user.id]
+    );
+
+    auditChange(req, 'update_clinical_session', 'clinical_session', sessionId, { patientId });
+    res.json({ success: true, session: { ...sess, ...fields, updated_at: new Date().toISOString() } });
+  } catch (err) {
+    logger.error('Error actualizando sesión clínica', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
+
+router.delete('/patients/:patientId/clinical-sessions/:sessionId', authWithBilling, async (req, res) => {
+  try {
+    const { patientId, sessionId } = req.params;
+    const pool = getPool();
+
+    const { rows: sessRows } = await pool.query(
+      'SELECT * FROM clinical_sessions WHERE id = $1 AND patient_id = $2 AND therapist_id = $3',
+      [sessionId, patientId, req.user.id]
+    );
+    if (sessRows.length === 0) return res.status(404).json({ success: false, error: 'Sesión no encontrada' });
+
+    // ON DELETE SET NULL en clinical_notes.session_id preserva las notas
+    await pool.query('DELETE FROM clinical_sessions WHERE id = $1 AND therapist_id = $2', [sessionId, req.user.id]);
+    auditChange(req, 'delete_clinical_session', 'clinical_session', sessionId, { patientId });
+
+    res.json({ success: true, message: 'Sesión eliminada' });
+  } catch (err) {
+    logger.error('Error eliminando sesión clínica', { error: err.message });
+    res.status(500).json({ success: false });
+  }
+});
 
 module.exports = router;

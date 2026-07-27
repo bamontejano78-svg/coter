@@ -2438,9 +2438,7 @@ tbody tr:hover {
 .insights-actions{display:flex;gap:8px;padding:12px 0;}
 @media (max-width:600px){.alerts-badge{margin-left:8px;}}
 
-/* ═══════════════════════════════════════════════════════════
-   Widget Preview Modal
-   ═══════════════════════════════════════════════════════════ */
+@media (max-width:600px){.alerts-badge{margin-left:8px;}}
 .widget-preview-overlay {
   position: fixed;
   inset: 0;
@@ -2578,3 +2576,23 @@ tbody tr:hover {
     align-items: stretch;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Clinical Sessions
+   ═══════════════════════════════════════════════════════════ */
+.session-card{background:var(--s);border:1px solid var(--b);border-radius:var(--r);padding:16px;margin-bottom:12px;}
+.session-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+.session-info{flex:1;}
+.session-date{font-weight:600;font-size:14px;color:var(--fg);margin-bottom:4px;}
+.session-meta{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.session-actions{display:flex;gap:6px;flex-shrink:0;}
+.session-summary{margin-top:10px;padding:10px 12px;background:var(--g);border-radius:var(--r-sm);font-size:13px;color:var(--fg);line-height:1.5;border-left:3px solid var(--primary);}
+.session-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;}
+.session-badge.completed{background:#dcfce7;color:#16a34a;}
+.session-badge.scheduled{background:#dbeafe;color:#2563eb;}
+.session-badge.cancelled{background:#fee2e2;color:#dc2626;}
+.session-notes-list{margin-top:12px;border-top:1px solid var(--b);padding-top:10px;}
+.session-notes-title{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;}
+.session-note-item{background:var(--g);border-radius:var(--r-sm);padding:8px 10px;margin-bottom:6px;font-size:12px;}
+.session-note-sections{display:flex;flex-wrap:wrap;gap:4px;}
+.soap-tag{display:inline-block;background:var(--s);border:1px solid var(--b);border-radius:4px;padding:2px 6px;font-size:11px;color:var(--fg);}

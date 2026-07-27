@@ -416,7 +416,7 @@ async function openPatient(patientId){
     patientData=d.patient;
     currentPatientDataTicketsKey = (patientData.assignments || []).map(a => a.id + ':' + a.status).join(',');
     document.getElementById('modalPatientName').textContent=patientData.name||'Paciente '+patientId.slice(0,8);
-    renderChat();renderCheckins();renderTasks();renderGoals();renderNotes();loadPreSession();loadInsights();
+    renderChat();renderCheckins();renderTasks();renderGoals();renderSessions();renderNotes();loadPreSession();loadInsights();
     // Eliminamos el patientPoll (antes 4s): los mensajes llegan por SSE
     // (ver handleSSEEvent → message:new) y se refrescan automáticamente
     // mediante refreshCurrentPatientData().
@@ -567,6 +567,138 @@ async function renderNotes(){
         </div></div>`;
     }).join('');
   }catch(e){box.innerHTML='<p class="empty-msg error">Error al cargar notas</p>';}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SESIONES CLÍNICAS (registro estructurado)
+// ═══════════════════════════════════════════════════════════════
+async function renderSessions(){
+  const box=document.getElementById('patientSessions');
+  if(!currentPatientId){renderEmptyState(box,{icon:'📅',title:'Sin sesiones',desc:'Selecciona un paciente para ver su historial de sesiones clínicas.'});return;}
+  try{
+    const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-sessions`);
+    const d=await r.json();
+    if(!d.success||!d.sessions?.length){renderEmptyState(box,{icon:'📅',title:'Sin sesiones registradas',desc:'Registra sesiones clínicas para documentar el progreso entre consultas.',cta:'Registrar sesión',ctaAction:showAddSession});return;}
+    box.innerHTML=d.sessions.map((s,i)=>{
+      const date=new Date(s.session_date).toLocaleDateString('es-ES',{day:'numeric',month:'long',year:'numeric'});
+      const time=new Date(s.session_date).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
+      const typeLabel=s.type==='presencial'?'🏥 Presencial':s.type==='videollamada'?'📹 Videollamada':s.type==='telefonica'?'📞 Telefónica':'💻 Chat online';
+      const statusBadge=s.status==='completed'?'<span class="session-badge completed">✅ Completada</span>':s.status==='cancelled'?'<span class="session-badge cancelled">❌ Cancelada</span>':'<span class="session-badge scheduled">📋 Programada</span>';
+      const duration=s.duration_min?` · ${s.duration_min} min`:'';
+      const summary=s.notes_summary?`<div class="session-summary">${sanitizeHTML(s.notes_summary)}</div>`:'';
+      const notesHtml=(s.notes||[]).length?`<div class="session-notes-list"><div class="session-notes-title">📝 ${s.notes.length} nota${s.notes.length===1?'':'s'} vinculada${s.notes.length===1?'':'s'}:</div>${s.notes.map(n=>`<div class="session-note-item"><div class="session-note-sections">${[['S',n.subjective],['O',n.objective],['A',n.assessment],['P',n.plan]].filter(([,v])=>v).map(([k,v])=>`<span class="soap-tag">${k}: ${sanitizeHTML(v.length>60?v.substring(0,60)+'…':v)}</span>`).join(' ')}</div></div>`).join('')}</div>`:'';
+      return`<div class="session-card" id="session-${s.id}" style="animation: fadeInUp .3s cubic-bezier(.22,1,.36,1) ${i*.04}s both">
+        <div class="session-header">
+          <div class="session-info">
+            <div class="session-date">${date} · ${time}${duration}</div>
+            <div class="session-meta">${typeLabel} ${statusBadge}</div>
+          </div>
+          <div class="session-actions">
+            <button class="btn btn-w btn-sm" onclick="showEditSession('${s.id}')" aria-label="Editar sesión">✏️</button>
+            <button class="btn btn-d btn-sm" onclick="deleteSession('${s.id}')" aria-label="Eliminar sesión">🗑️</button>
+          </div>
+        </div>
+        ${summary}
+        ${notesHtml}
+      </div>`;
+    }).join('');
+  }catch(e){console.error('Error loading sessions:',e);}
+}
+
+function showAddSession(){
+  if(!currentPatientId)return;
+  Swal.fire({title:'📅 Registrar sesión clínica',html:`
+    <label class="soap-label">Fecha y hora</label>
+    <input type="datetime-local" id="swalSessionDate" class="swal2-input">
+    <label class="soap-label">Duración (minutos)</label>
+    <input type="number" id="swalSessionDuration" class="swal2-input" placeholder="Ej: 50" min="1" max="300" value="50">
+    <label class="soap-label">Tipo de sesión</label>
+    <select id="swalSessionType" class="swal2-input">
+      <option value="presencial">🏥 Presencial</option>
+      <option value="videollamada">📹 Videollamada</option>
+      <option value="telefonica">📞 Telefónica</option>
+      <option value="online_chat">💻 Chat online</option>
+    </select>
+    <label class="soap-label">Estado</label>
+    <select id="swalSessionStatus" class="swal2-input">
+      <option value="completed">✅ Completada</option>
+      <option value="scheduled">📋 Programada</option>
+      <option value="cancelled">❌ Cancelada</option>
+    </select>
+    <label class="soap-label">Resumen de la sesión (opcional)</label>
+    <textarea id="swalSessionSummary" class="swal2-textarea" placeholder="Notas generales de la sesión…" rows="3" maxlength="500"></textarea>
+  `,showCancelButton:true,confirmButtonText:'Guardar',confirmButtonColor:'#6366f1',
+    preConfirm:async()=>{
+      const session_date=document.getElementById('swalSessionDate').value||new Date().toISOString();
+      const duration_min=parseInt(document.getElementById('swalSessionDuration').value)||null;
+      const type=document.getElementById('swalSessionType').value;
+      const status=document.getElementById('swalSessionStatus').value;
+      const notes_summary=document.getElementById('swalSessionSummary').value.trim()||null;
+      try{
+        const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-sessions`,{method:'POST',body:JSON.stringify({session_date,duration_min,type,status,notes_summary})});
+        const d=await r.json();
+        if(!d.success)return Swal.showValidationMessage(d.error||'Error al guardar');
+        renderSessions();
+      }catch(e){Swal.showValidationMessage('Error de conexión');}
+    }
+  });
+}
+
+function showEditSession(sessionId){
+  if(!currentPatientId)return;
+  api(`${API}/therapists/patients/${currentPatientId}/clinical-sessions/${sessionId}`).then(r=>r.json()).then(d=>{
+    if(!d.success||!d.session)return Swal.fire('Error','Sesión no encontrada','error');
+    const s=d.session;
+    const dateStr=new Date(s.session_date).toISOString().slice(0,16);
+    Swal.fire({title:'✏️ Editar sesión',html:`
+      <label class="soap-label">Fecha y hora</label>
+      <input type="datetime-local" id="swalSessionDate" class="swal2-input" value="${dateStr}">
+      <label class="soap-label">Duración (minutos)</label>
+      <input type="number" id="swalSessionDuration" class="swal2-input" value="${s.duration_min||'50'}" min="1" max="300">
+      <label class="soap-label">Tipo</label>
+      <select id="swalSessionType" class="swal2-input">
+        <option value="presencial" ${s.type==='presencial'?'selected':''}>🏥 Presencial</option>
+        <option value="videollamada" ${s.type==='videollamada'?'selected':''}>📹 Videollamada</option>
+        <option value="telefonica" ${s.type==='telefonica'?'selected':''}>📞 Telefónica</option>
+        <option value="online_chat" ${s.type==='online_chat'?'selected':''}>💻 Chat online</option>
+      </select>
+      <label class="soap-label">Estado</label>
+      <select id="swalSessionStatus" class="swal2-input">
+        <option value="completed" ${s.status==='completed'?'selected':''}>✅ Completada</option>
+        <option value="scheduled" ${s.status==='scheduled'?'selected':''}>📋 Programada</option>
+        <option value="cancelled" ${s.status==='cancelled'?'selected':''}>❌ Cancelada</option>
+      </select>
+      <label class="soap-label">Resumen</label>
+      <textarea id="swalSessionSummary" class="swal2-textarea" rows="3" maxlength="500">${s.notes_summary||''}</textarea>
+    `,showCancelButton:true,confirmButtonText:'Actualizar',confirmButtonColor:'#6366f1',
+      preConfirm:async()=>{
+        const session_date=document.getElementById('swalSessionDate').value;
+        const duration_min=parseInt(document.getElementById('swalSessionDuration').value)||null;
+        const type=document.getElementById('swalSessionType').value;
+        const status=document.getElementById('swalSessionStatus').value;
+        const notes_summary=document.getElementById('swalSessionSummary').value.trim()||null;
+        try{
+          const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-sessions/${sessionId}`,{method:'PUT',body:JSON.stringify({session_date,duration_min,type,status,notes_summary})});
+          const d=await r.json();
+          if(!d.success)return Swal.showValidationMessage(d.error||'Error al actualizar');
+          renderSessions();
+          Swal.clickConfirm()
+        }catch(e){Swal.showValidationMessage('Error de conexión');}
+      }
+    });
+  });
+}
+
+async function deleteSession(sessionId){
+  if(!currentPatientId)return;
+  const result=await Swal.fire({title:'¿Eliminar sesión?',text:'Las notas vinculadas a esta sesión se conservarán (sin sesión asociada).',icon:'warning',showCancelButton:true,confirmButtonText:'Sí, eliminar',cancelButtonText:'Cancelar',confirmButtonColor:'#ef4444'});
+  if(!result.isConfirmed)return;
+  try{
+    const r=await api(`${API}/therapists/patients/${currentPatientId}/clinical-sessions/${sessionId}`,{method:'DELETE'});
+    const d=await r.json();
+    if(d.success){renderSessions();Swal.fire({title:'🗑️ Sesión eliminada',icon:'success',timer:1500,showConfirmButton:false});}
+    else Swal.fire('Error',d.error||'No se pudo eliminar','error');
+  }catch(e){Swal.fire('Error','No se pudo eliminar','error');}
 }
 
 function showAddNote(){
@@ -1868,6 +2000,7 @@ document.addEventListener('click', function(e){
       case 'send-msg': sendTherapistMsg(); break;
       case 'add-task': showAddTask(); break;
       case 'add-goal': showAddGoal(); break;
+      case 'add-session': showAddSession(); break;
       case 'add-note': showAddNote(); break;
       case 'create-template': showCreateTemplate(); break;
       case 'prev-month': prevMonth(); break;
