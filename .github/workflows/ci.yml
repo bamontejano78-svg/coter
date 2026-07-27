@@ -139,57 +139,60 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
 
     steps:
-      - name: Check SSH availability
-        id: check-ssh
+      - name: Deploy to Staging
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.STAGING_DEPLOY_PATH || '/opt/coter-staging' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}:main
         run: |
           if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ] || [ -z "$SSH_KEY" ]; then
-            echo "ssh_available=false" >> "$GITHUB_OUTPUT"
             echo "::notice::SSH credentials not configured — skipping remote deploy"
             echo "💡 Run scripts/deploy-staging-local.sh for local deploy"
-          else
-            echo "ssh_available=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::SSH credentials found — proceeding with remote deploy"
+            exit 0
           fi
 
-      - name: Deploy via SSH
-        if: steps.check-ssh.outputs.ssh_available == 'true'
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || '22' }}
-          script: |
-            set -e
+          echo "🔐 Deploying to $SSH_HOST:$SSH_PORT as $SSH_USER..."
 
-            echo "🔐 Logging into GHCR..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # Setup SSH key
+          install -m 600 -D /dev/null ~/.ssh/deploy_key
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
 
-            IMAGE="${{ env.REGISTRY }}/${{ github.repository }}:main"
-            echo "📥 Pulling: $IMAGE"
-            docker pull "$IMAGE"
+          # Run deploy commands on remote host
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -p "$SSH_PORT" \
+            "$SSH_USER@$SSH_HOST" \
+            "set -e
 
-            cd "${{ secrets.STAGING_DEPLOY_PATH || '/opt/coter-staging' }}"
+          echo '🔐 Logging into GHCR...'
+          echo '$GH_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
 
-            echo "🚀 Restarting API with new image..."
-            API_IMAGE="$IMAGE" \
-              docker compose -f docker-compose.staging.yml up -d --no-build --force-recreate api
+          echo '📥 Pulling: $IMAGE'
+          docker pull '$IMAGE'
 
-            echo "⏳ Waiting for health check..."
-            for i in $(seq 1 30); do
-              if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
-                echo "✅ API healthy after $((i * 2))s"
-                break
-              fi
-              [ $i -eq 30 ] && echo "❌ Health check timeout" && exit 1
-              sleep 2
-            done
+          cd '$DEPLOY_PATH'
 
-            echo "🧹 Pruning dangling images (>24h old)..."
-            docker image prune -af --filter "until=24h" || true
+          echo '🚀 Restarting API with new image...'
+          API_IMAGE='$IMAGE' docker compose -f docker-compose.staging.yml up -d --no-build --force-recreate api
 
-            echo "✅ Deploy complete!"
+          echo '⏳ Waiting for health check...'
+          for i in \$(seq 1 30); do
+            if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+              echo '✅ API healthy after \$((i * 2))s'
+              break
+            fi
+            [ \$i -eq 30 ] && echo '❌ Health check timeout' && exit 1
+            sleep 2
+          done
+
+          echo '🧹 Pruning dangling images...'
+          docker image prune -af --filter 'until=24h' || true
+
+          echo '✅ Deploy complete!'"
+
+          echo "::notice::Deploy to staging completed successfully"
