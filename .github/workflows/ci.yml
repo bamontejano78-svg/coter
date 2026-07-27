@@ -170,7 +170,10 @@ jobs:
             "set -e
 
           echo '🔐 Logging into GHCR...'
-          echo '$GH_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          printf '%s' '$GH_TOKEN' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+# GHA vars ($IMAGE, $GH_TOKEN, $DEPLOY_PATH) expand on runner;
+# escaped \$i and \$(seq) expand on remote host
 
           echo '📥 Pulling: $IMAGE'
           docker pull '$IMAGE'
