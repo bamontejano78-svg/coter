@@ -1733,22 +1733,33 @@ router.get('/export/:patientId', authWithBilling, async (req, res) => {
     const { rows: messages } = await pool.query('SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]);
     const { rows: assignments } = await pool.query('SELECT * FROM assignments WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]);
     const { rows: goals } = await pool.query('SELECT * FROM goals WHERE patient_id = $1', [patientId]);
+    const { rows: notes } = await pool.query('SELECT * FROM clinical_notes WHERE patient_id = $1 AND therapist_id = $2 ORDER BY created_at ASC', [patientId, req.user.id]);
+    const { rows: sessions } = await pool.query('SELECT * FROM clinical_sessions WHERE patient_id = $1 AND therapist_id = $2 ORDER BY session_date ASC', [patientId, req.user.id]);
 
-    const format = req.query.format || 'json';
+    const format = (req.query.format || 'json').toLowerCase();
     const decryptedCheckIns = decryptCheckIns(checkIns);
     const decryptedMessages = decryptMessages(messages);
     const decryptedAssignments = decryptAssignments(assignments);
+    const patient = patientRows[0];
 
     if (format === 'csv') {
-      const patient = patientRows[0];
-      const csv = generateCSV(patient, decryptedCheckIns, decryptedMessages, decryptedAssignments, goals);
+      const csv = generateCSV(patient, decryptedCheckIns, decryptedMessages, decryptedAssignments, goals, notes, sessions);
+      auditChange(req, 'export_patient_data', 'patient', patientId, { format: 'csv' });
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename=coter_' + patientId.slice(0, 8) + '.csv');
       return res.send(csv);
     }
-    const patient = patientRows[0];
-    auditChange(req, 'export_patient_data', 'patient', patientId, { format });
-    res.json({ export_date: new Date().toISOString(), patient, check_ins: decryptedCheckIns, messages: decryptedMessages, assignments: decryptedAssignments, goals });
+
+    if (format === 'pdf' || format === 'html') {
+      const html = generateHTMLReport(patient, decryptedCheckIns, decryptedMessages, decryptedAssignments, goals, notes, sessions);
+      auditChange(req, 'export_patient_data', 'patient', patientId, { format });
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename=historial_' + (patient.name || patientId.slice(0, 8)).replace(/\s+/g, '_') + '.html');
+      return res.send(html);
+    }
+
+    auditChange(req, 'export_patient_data', 'patient', patientId, { format: 'json' });
+    res.json({ export_date: new Date().toISOString(), patient, check_ins: decryptedCheckIns, messages: decryptedMessages, assignments: decryptedAssignments, goals, notes, sessions });
   } catch (err) {
     logger.error('Error exportando', { error: err.message });
     res.status(500).json({ success: false });
@@ -1846,7 +1857,7 @@ function calcStreak(checkIns) {
   return streak;
 }
 
-function generateCSV(patient, checkIns, messages, assignments, goals) {
+function generateCSV(patient, checkIns, messages, assignments, goals, notes, sessions) {
   let csv = 'TIPO,FECHA,DATOS\n';
   csv += 'PACIENTE,,' + (patient.name || 'Anonimo') + ',' + (patient.email || '') + '\n';
   csv += 'EXPORTACION,,' + new Date().toISOString() + '\n\n';
@@ -1858,7 +1869,146 @@ function generateCSV(patient, checkIns, messages, assignments, goals) {
   assignments.forEach(a => csv += (a.created_at || '') + ',' + a.title + ',' + a.type + ',' + a.status + ',"' + (a.instructions || '').replace(/"/g, '""') + '"\n');
   csv += '\nOBJETIVOS\nTitulo,Metrica,Valor Actual,Valor Objetivo,Estado\n';
   goals.forEach(g => csv += g.title + ',' + g.metric + ',' + g.current_value + ',' + g.target_value + ',' + g.status + '\n');
+  if (notes && notes.length) {
+    csv += '\nNOTAS CLINICAS (SOAP)\nFecha,Subjetivo,Objetivo,Evaluacion,Plan\n';
+    notes.forEach(n => csv += (n.created_at || '') + ',"' + (n.subjective || '').replace(/"/g, '""') + '","' + (n.objective || '').replace(/"/g, '""') + '","' + (n.assessment || '').replace(/"/g, '""') + '","' + (n.plan || '').replace(/"/g, '""') + '"\n');
+  }
+  if (sessions && sessions.length) {
+    csv += '\nSESIONES CLINICAS\nFecha,Duracion (min),Tipo,Estado,Resumen\n';
+    sessions.forEach(s => csv += (s.session_date || '') + ',' + (s.duration_min || '') + ',' + s.type + ',' + s.status + ',"' + (s.notes_summary || '').replace(/"/g, '""') + '"\n');
+  }
   return csv;
+}
+
+/**
+ * Genera un reporte clínico en HTML imprimible con diseño profesional.
+ * Incluye todas las secciones: check-ins, mensajes, tareas, objetivos,
+ * notas SOAP y sesiones clínicas. El CSS inline garantiza que se vea
+ * bien al imprimir o guardar como PDF desde el navegador.
+ */
+function generateHTMLReport(patient, checkIns, messages, assignments, goals, notes, sessions) {
+  const esc = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const date = (d) => d ? new Date(d).toLocaleString('es-ES', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+  const shortDate = (d) => d ? new Date(d).toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' }) : '-';
+
+  const typeLabel = (t) => t === 'presencial' ? 'Presencial' : t === 'videollamada' ? 'Videollamada' : t === 'telefonica' ? 'Telefónica' : t === 'online_chat' ? 'Chat online' : t;
+  const statusLabel = (s) => s === 'completed' ? 'Completada' : s === 'scheduled' ? 'Programada' : s === 'cancelled' ? 'Cancelada' : s;
+
+  const sections = [];
+
+  // ── Check-ins ──
+  if (checkIns.length) {
+    sections.push(`<h2>📊 Check-ins emocionales <span class="count">${checkIns.length}</span></h2>
+      <table><thead><tr><th>Fecha</th><th>Ánimo</th><th>Ansiedad</th><th>Energía</th><th>Pensamientos</th></tr></thead><tbody>
+      ${checkIns.map(c => `<tr><td>${date(c.created_at)}</td><td class="mood mood-${c.mood <= 3 ? 'low' : c.mood >= 7 ? 'high' : 'mid'}">${c.mood}/10</td><td>${c.anxiety}/10</td><td>${c.energy || '-'}/10</td><td>${esc(c.thoughts || '')}</td></tr>`).join('')}
+      </tbody></table>`);
+  }
+
+  // ── Mensajes ──
+  if (messages.length) {
+    sections.push(`<h2>💬 Conversación <span class="count">${messages.length}</span></h2>
+      <div class="chat-log">
+      ${messages.map(m => `<div class="msg ${m.is_therapist ? 'therapist' : 'patient'}"><div class="msg-header">${m.is_therapist ? '🧑‍⚕️ Terapeuta' : '👤 Paciente'} · ${date(m.created_at)}</div><div class="msg-body">${esc(m.message)}</div></div>`).join('')}
+      </div>`);
+  }
+
+  // ── Tareas ──
+  if (assignments.length) {
+    sections.push(`<h2>📋 Tareas y ejercicios <span class="count">${assignments.length}</span></h2>
+      <table><thead><tr><th>Fecha</th><th>Título</th><th>Tipo</th><th>Estado</th><th>Instrucciones</th></tr></thead><tbody>
+      ${assignments.map(a => `<tr><td>${shortDate(a.created_at)}</td><td><strong>${esc(a.title)}</strong></td><td>${esc(a.type)}</td><td class="status status-${a.status === 'completed' ? 'ok' : 'pending'}">${a.status === 'completed' ? '✅ Completada' : '⏳ Pendiente'}</td><td>${esc((a.instructions || '').substring(0, 200))}</td></tr>`).join('')}
+      </tbody></table>`);
+  }
+
+  // ── Objetivos ──
+  if (goals.length) {
+    sections.push(`<h2>🎯 Objetivos terapéuticos <span class="count">${goals.length}</span></h2>
+      <table><thead><tr><th>Título</th><th>Métrica</th><th>Progreso</th><th>Estado</th></tr></thead><tbody>
+      ${goals.map(g => { const pct = g.target_value > 0 ? Math.min(100, Math.round((g.current_value / g.target_value) * 100)) : 0;
+        return `<tr><td><strong>${esc(g.title)}</strong></td><td>${esc(g.metric)}</td><td>${g.current_value}/${g.target_value} (${pct}%)<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></td><td class="status status-${g.status === 'completed' ? 'ok' : 'pending'}">${g.status === 'completed' ? '✅ Completado' : '🎯 Activo'}</td></tr>`;
+      }).join('')}
+      </tbody></table>`);
+  }
+
+  // ── Notas clínicas ──
+  if (notes && notes.length) {
+    sections.push(`<h2>📝 Notas clínicas (SOAP) <span class="count">${notes.length}</span></h2>
+      ${notes.map(n => `<div class="soap-note"><div class="soap-date">${date(n.created_at)}</div>
+        ${n.subjective ? `<div class="soap-section"><strong>S — Subjetivo:</strong> ${esc(n.subjective)}</div>` : ''}
+        ${n.objective ? `<div class="soap-section"><strong>O — Objetivo:</strong> ${esc(n.objective)}</div>` : ''}
+        ${n.assessment ? `<div class="soap-section"><strong>A — Evaluación:</strong> ${esc(n.assessment)}</div>` : ''}
+        ${n.plan ? `<div class="soap-section"><strong>P — Plan:</strong> ${esc(n.plan)}</div>` : ''}
+      </div>`).join('')}`);
+  }
+
+  // ── Sesiones clínicas ──
+  if (sessions && sessions.length) {
+    sections.push(`<h2>📅 Sesiones clínicas <span class="count">${sessions.length}</span></h2>
+      <table><thead><tr><th>Fecha</th><th>Duración</th><th>Tipo</th><th>Estado</th><th>Resumen</th></tr></thead><tbody>
+      ${sessions.map(s => `<tr><td>${date(s.session_date)}</td><td>${s.duration_min || '-'} min</td><td>${typeLabel(s.type)}</td><td class="status status-${s.status === 'completed' ? 'ok' : s.status === 'cancelled' ? 'cancelled' : 'pending'}">${statusLabel(s.status)}</td><td>${esc((s.notes_summary || '').substring(0, 150))}</td></tr>`).join('')}
+      </tbody></table>`);
+  }
+
+  const bodyContent = sections.length ? sections.join('\n') : '<p style="text-align:center;color:#888;padding:40px">No hay datos clínicos para exportar en este período.</p>';
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Historial Clínico — ${esc(patient.name || 'Paciente')} — Coter Pro</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:'Inter',-apple-system,sans-serif;color:#1e293b;background:#fff;max-width:900px;margin:0 auto;padding:40px 24px;line-height:1.6;}
+  .header{text-align:center;padding-bottom:24px;border-bottom:2px solid #6366f1;margin-bottom:32px;}
+  .header h1{font-size:28px;color:#6366f1;margin-bottom:4px;}
+  .header .subtitle{font-size:14px;color:#64748b;}
+  .patient-info{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;background:#f8fafc;padding:16px 20px;border-radius:10px;margin-bottom:24px;font-size:13px;color:#475569;}
+  .patient-info strong{color:#1e293b;}
+  h2{font-size:20px;color:#334155;margin:28px 0 12px;display:flex;align-items:center;gap:8px;}
+  .count{font-size:12px;font-weight:500;background:#e2e8f0;color:#475569;padding:2px 8px;border-radius:10px;}
+  table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px;}
+  th{background:#f1f5f9;color:#475569;font-weight:600;text-align:left;padding:10px 12px;border-bottom:2px solid #e2e8f0;font-size:12px;text-transform:uppercase;letter-spacing:.5px;}
+  td{padding:10px 12px;border-bottom:1px solid #f1f5f9;}
+  .mood{padding:2px 8px;border-radius:4px;font-weight:600;}
+  .mood-low{background:#fef2f2;color:#ef4444;}
+  .mood-mid{background:#fffbeb;color:#f59e0b;}
+  .mood-high{background:#f0fdf4;color:#10b981;}
+  .status-ok{color:#10b981;font-weight:600;}
+  .status-pending{color:#f59e0b;}
+  .status-cancelled{color:#ef4444;}
+  .progress-bar{width:100%;height:6px;background:#e2e8f0;border-radius:3px;margin-top:4px;}
+  .progress-fill{height:6px;background:#6366f1;border-radius:3px;transition:width .3s;}
+  .chat-log{margin-bottom:16px;}
+  .msg{padding:12px 16px;border-radius:8px;margin-bottom:8px;font-size:13px;}
+  .msg.therapist{background:#eef2ff;border-left:3px solid #6366f1;}
+  .msg.patient{background:#f8fafc;border-left:3px solid #cbd5e1;}
+  .msg-header{font-size:11px;color:#64748b;margin-bottom:4px;}
+  .msg-body{color:#1e293b;}
+  .soap-note{background:#f8fafc;border-radius:8px;padding:14px 16px;margin-bottom:10px;border:1px solid #e2e8f0;}
+  .soap-date{font-size:12px;color:#6366f1;font-weight:600;margin-bottom:8px;}
+  .soap-section{margin-bottom:6px;font-size:13px;}
+  .footer{margin-top:40px;padding-top:16px;border-top:1px solid #e2e8f0;text-align:center;font-size:11px;color:#94a3b8;}
+  @media print{body{padding:20px;}table{page-break-inside:auto;}tr{page-break-inside:avoid;}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🧠 Coter Pro — Historial Clínico</h1>
+  <div class="subtitle">Exportado el ${date(new Date().toISOString())}</div>
+</div>
+<div class="patient-info">
+  <div><strong>Paciente:</strong> ${esc(patient.name || 'Anónimo')}</div>
+  <div><strong>ID:</strong> ${patient.id ? patient.id.slice(0, 12) + '...' : '-'}</div>
+  <div><strong>Email:</strong> ${esc(patient.email || '-')}</div>
+  <div><strong>Estado:</strong> ${patient.status === 'active' ? '✅ Activo' : 'Inactivo'}</div>
+</div>
+${bodyContent}
+<div class="footer">
+  Este documento contiene información clínica confidencial. Generado por Coter Pro — ${new Date().toISOString().slice(0, 10)}<br>
+  El uso de esta información está sujeto a las leyes de protección de datos aplicables.
+</div>
+</body>
+</html>`;
 }
 
 // ─── SESIONES CLÍNICAS ────────────────────────────────────────

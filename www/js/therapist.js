@@ -1773,12 +1773,47 @@ async function disconnectPatient(){
 
 async function exportPatientData(){
   if(!currentPatientId)return;
+  var patientName=patientData&&patientData.name||currentPatientId.slice(0,8);
+  var result=await Swal.fire({
+    title:'Exportar historial clínico',
+    html:`<p style="margin-bottom:16px;color:var(--muted);font-size:13px;">Exporta el historial completo de <strong>${sanitizeHTML(patientName)}</strong>: check-ins, mensajes, tareas, objetivos, notas SOAP y sesiones.</p>`,
+    icon:'question',
+    showCancelButton:true,
+    showConfirmButton:false,
+    cancelButtonText:'Cancelar',
+    showDenyButton:true,
+    denyButtonText:'📄 PDF (reporte)',
+    footer:`<button id="btnExportCSV" class="swal2-confirm swal2-styled" style="margin-right:8px;font-size:14px">📊 CSV (datos)</button>`,
+    didOpen:function(){
+      document.getElementById('btnExportCSV').addEventListener('click',function(){
+        Swal.close();
+        downloadExport('csv');
+      });
+    }
+  });
+  if(result.isDenied){
+    downloadExport('pdf');
+  }
+}
+
+async function downloadExport(format){
   try{
-    const r=await api(`${API}/therapists/export/${currentPatientId}?format=csv`);
-    const blob=await r.blob();const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');a.href=url;a.download=`coter_${currentPatientId.slice(0,8)}.csv`;a.click();URL.revokeObjectURL(url);
-    Swal.fire({title:'✅ Exportado',icon:'success',timer:1500,showConfirmButton:false});
-  }catch(e){Swal.fire('Error','No se pudo exportar','error');}
+    var r=await api(`${API}/therapists/export/${currentPatientId}?format=${format}`);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    if(format==='pdf'){
+      // Abrir reporte HTML en nueva pestaña (el usuario puede imprimir/guardar como PDF)
+      var html=await r.text();
+      var w=window.open('','_blank','width=1000,height=800');
+      if(!w){Swal.fire('Error','El navegador bloqueó la ventana emergente. Permite ventanas emergentes para ver el reporte.','warning');return;}
+      w.document.write(html);
+      w.document.close();
+      Swal.fire({title:'✅ Reporte abierto',text:'Usa Ctrl+P → Guardar como PDF para descargarlo.',icon:'success',timer:2500,showConfirmButton:false});
+    }else{
+      var blob=await r.blob();var url=URL.createObjectURL(blob);
+      var a=document.createElement('a');a.href=url;a.download='coter_'+currentPatientId.slice(0,8)+'.csv';a.click();URL.revokeObjectURL(url);
+      Swal.fire({title:'✅ CSV descargado',icon:'success',timer:1500,showConfirmButton:false});
+    }
+  }catch(e){Swal.fire('Error','No se pudo exportar: '+e.message,'error');}
 }
 
 async function loadCode(){
