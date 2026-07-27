@@ -585,6 +585,11 @@ describe('Billing Guard — authWithBilling middleware', () => {
   let canceledId;
 
   beforeAll(async () => {
+    // Activar el guard de billing para estos tests específicos.
+    // Por defecto, en modo test el guard se salta para no interferir
+    // con otros tests que no tienen la tabla subscriptions preparada.
+    process.env.BILLING_TEST_MODE = 'true';
+
     // Terapeuta normal (trial activo)
     const reg = await request(app)
       .post('/api/v1/therapists/register')
@@ -613,6 +618,9 @@ describe('Billing Guard — authWithBilling middleware', () => {
   });
 
   afterAll(async () => {
+    // Restaurar skip de billing primero — siempre, incluso si falla la BD
+    delete process.env.BILLING_TEST_MODE;
+
     await pool.query('DELETE FROM billing_events WHERE therapist_id = ANY($1::uuid[])', [[therapistId, canceledId]]);
     await pool.query('DELETE FROM subscriptions WHERE therapist_id = ANY($1::uuid[])', [[therapistId, canceledId]]);
     await pool.query('DELETE FROM therapists WHERE id = ANY($1::uuid[])', [[therapistId, canceledId]]);

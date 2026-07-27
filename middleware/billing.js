@@ -26,6 +26,10 @@ const logger = require('../config/logger');
  * Si req.user no existe, hace no-op (para rutas sin auth como login/register).
  */
 async function billingGuard(req, res, next) {
+  // En modo test, saltar el guard de facturación a menos que los tests
+  // de billing lo activen explícitamente con BILLING_TEST_MODE=true.
+  if (process.env.NODE_ENV === 'test' && process.env.BILLING_TEST_MODE !== 'true') return next();
+
   const therapistId = req.user?.id;
   if (!therapistId) {
     // Ruta sin auth previa (login, register, password-recovery, etc.).
