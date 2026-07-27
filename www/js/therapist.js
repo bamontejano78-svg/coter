@@ -702,6 +702,11 @@ async function deleteSession(sessionId){
 }
 
 function showAddNote(){
+  // Fetch sessions for the dropdown (async, loads from API)
+  var sessionsPromise = currentPatientId
+    ? api(`${API}/therapists/patients/${currentPatientId}/clinical-sessions`).then(r=>r.json()).then(d=>(d.sessions||[]).filter(s=>s.status==='completed').slice(0,20)).catch(()=>[])
+    : Promise.resolve([]);
+
   Swal.fire({title:'Nueva nota clínica (SOAP)',html:`
     <label class="soap-label">S — Subjetivo</label>
     <textarea id="swalSubjective" class="swal2-textarea" placeholder="Lo que el paciente reporta: síntomas, quejas, sentimientos..." rows="2"></textarea>
@@ -711,14 +716,32 @@ function showAddNote(){
     <textarea id="swalAssessment" class="swal2-textarea" placeholder="Tu análisis clínico: diagnóstico, progreso, patrones..." rows="2"></textarea>
     <label class="soap-label">P — Plan</label>
     <textarea id="swalPlan" class="swal2-textarea" placeholder="Próximos pasos: tareas, objetivos, frecuencia de sesiones..." rows="2"></textarea>
-  `,showCancelButton:true,confirmButtonText:'Guardar nota',cancelButtonText:'Cancelar',width:650,preConfirm:async()=>{
+    <label class="soap-label">Vincular a sesión (opcional)</label>
+    <select id="swalSessionId" class="swal2-input">
+      <option value="">— Sin sesión —</option>
+    </select>
+    <small style="color:var(--muted);display:block;margin-top:2px">Se muestran las últimas 20 sesiones completadas</small>
+  `,showCancelButton:true,confirmButtonText:'Guardar nota',cancelButtonText:'Cancelar',width:650,
+    didOpen:()=>{
+      var sel=document.getElementById('swalSessionId');
+      sessionsPromise.then(function(sessions){
+        sel.innerHTML='<option value="">— Sin sesión —</option>' +
+          sessions.map(function(s){
+            var d=new Date(s.session_date).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'});
+            var dur=s.duration_min?s.duration_min+' min':'';
+            return '<option value="'+s.id+'">'+d+(dur?' · '+dur:'')+(s.notes_summary?' — '+s.notes_summary.substring(0,50):'')+'</option>';
+          }).join('');
+      });
+    },
+    preConfirm:async()=>{
     const subjective=document.getElementById('swalSubjective').value.trim();
     const objective=document.getElementById('swalObjective').value.trim();
     const assessment=document.getElementById('swalAssessment').value.trim();
     const plan=document.getElementById('swalPlan').value.trim();
+    const sessionId=document.getElementById('swalSessionId').value||null;
     if(!subjective&&!objective&&!assessment&&!plan){Swal.showValidationMessage('Completa al menos un campo SOAP');return false;}
     try{
-      await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes`,{method:'POST',body:JSON.stringify({subjective:subjective||null,objective:objective||null,assessment:assessment||null,plan:plan||null})});
+      await api(`${API}/therapists/patients/${currentPatientId}/clinical-notes`,{method:'POST',body:JSON.stringify({subjective:subjective||null,objective:objective||null,assessment:assessment||null,plan:plan||null,session_id:sessionId})});
       renderNotes();Swal.fire({title:'✅ Nota guardada',icon:'success',timer:1500,showConfirmButton:false});
     }catch(e){Swal.showValidationMessage('Error al guardar la nota');}
   }});
