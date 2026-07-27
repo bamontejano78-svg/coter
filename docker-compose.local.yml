@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════
+# Docker Compose Override — Desarrollo Local (sin SSL)
+# ═══════════════════════════════════════════════════════════
+# Uso: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# En local no necesitamos SSL ni nginx. La API se expone
+# directamente en el puerto 3000. PostgreSQL usa credenciales
+# de desarrollo.
+# ═══════════════════════════════════════════════════════════
+
+services:
+  api:
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+      # En local, la BD está en el mismo compose network
+      DATABASE_URL: postgresql://coter:coter_dev@postgres:5432/coter
+      # Secrets de desarrollo (NO USAR EN PRODUCCIÓN)
+      JWT_SECRET: dev_jwt_secret_local_only_do_not_use_in_prod_1234567890abcdef
+      ENCRYPTION_KEY: dev_encryption_key_32_bytes_local_only_abcdef0123456789abcdef0123456789
+      CORS_ORIGINS: http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000
+      APP_URL: http://localhost:3000
+      ADMIN_PASSWORD: admin_local_dev
+      # SMTP desactivado en local (no se enviarán emails reales)
+      SMTP_HOST: ''
+      # Stripe desactivado en local
+      STRIPE_SECRET_KEY: ''
+      # FCM desactivado en local
+      FCM_SERVER_KEY: ''
+
+  # En local no necesitamos nginx ni SSL
+  nginx:
+    profiles: ['prod-only']
+
+  certbot:
+    profiles: ['prod-only']
