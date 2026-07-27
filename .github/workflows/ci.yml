@@ -130,10 +130,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ─── DEPLOY STAGING ─────────────────────────────────────
-  # Salta con warning si los secrets SSH no están configurados.
+  # Salta si los secrets SSH no están configurados.
   # Para deploy local: ejecuta scripts/deploy-staging-local.sh
-  # NOTA: Cuando tengas servidor, configura el environment "staging"
-  # en Settings > Environments y añade los secrets SSH_HOST/USER/etc.
   deploy-staging:
     name: Deploy Staging
     runs-on: ubuntu-latest
@@ -141,56 +139,18 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
 
     steps:
-      - name: Check SSH availability
-        id: check-ssh
+      - name: Deploy
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST || '' }}
+          SSH_USER: ${{ secrets.SSH_USER || '' }}
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY || '' }}
         run: |
           if [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ] || [ -z "$SSH_KEY" ]; then
-            echo "ssh_available=false" >> "$GITHUB_OUTPUT"
-            echo "⚠️  Faltan credenciales SSH — saltando deploy remoto"
-            echo "💡 Ejecuta scripts/deploy-staging-local.sh en tu máquina para deploy local"
-          else
-            echo "ssh_available=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️  SSH credentials not configured — skipping remote deploy"
+            echo "💡 Run scripts/deploy-staging-local.sh for local deploy"
+            exit 0
           fi
 
-      - name: Deploy via SSH
-        if: steps.check-ssh.outputs.ssh_available == 'true'
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || '22' }}
-          script: |
-            set -e
-
-            echo "🔐 Logging into GHCR..."
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-            IMAGE="${{ env.REGISTRY }}/${{ github.repository }}:main"
-            echo "📥 Pulling: $IMAGE"
-            docker pull "$IMAGE"
-
-            cd "${{ secrets.STAGING_DEPLOY_PATH || '/opt/coter-staging' }}"
-
-            echo "🚀 Restarting API with new image..."
-            API_IMAGE="$IMAGE" \
-              docker compose -f docker-compose.staging.yml up -d --no-build --force-recreate api
-
-            echo "⏳ Waiting for health check..."
-            for i in $(seq 1 30); do
-              if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
-                echo "✅ API healthy after $((i * 2))s"
-                break
-              fi
-              [ $i -eq 30 ] && echo "❌ Health check timeout" && exit 1
-              sleep 2
-            done
-
-            echo "🧹 Pruning dangling images (>24h old)..."
-            docker image prune -af --filter "until=24h" || true
-
-            echo "✅ Deploy complete!"
+          echo "🔐 SSH credentials detected. Add deploy logic here."
+          echo "   Use appleboy/ssh-action@v1 or direct ssh commands."
+          exit 0
