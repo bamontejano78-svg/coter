@@ -7,7 +7,7 @@
 // En staging/prod con HTTPS o nginx, usar ruta relativa.
 const isLocalDev = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.protocol === 'http:';
 const API = isLocalDev ? 'http://localhost:3000/api/v1' : '/api/v1';
-let token=null,refreshToken=null,therapist=null,currentPatientId=null,patientData=null,trendChart=null;
+let token=null,refreshToken=null,therapist=null,currentPatientId=null,patientData=null,trendChart=null,adherenceChart=null,patientBreakdownChart=null,currentPeriod=7;
 let templates=[],templateCategories=[],activeCategory=null;
 let isRefreshing=false;
 let refreshPromise=null;
@@ -370,30 +370,125 @@ function handleSSEEvent(payload) {
   }
 }
 
-async function loadDashboard(){
+async function loadDashboard(period){
+  if(!period) period = currentPeriod;
+  currentPeriod = period;
   showSkeleton('recentActivity', 'list', 3);
   try{
-    const r=await api(`${API}/therapists/dashboard`);const d=await r.json();
+    const r=await api(`${API}/therapists/dashboard?period=${period}`);const d=await r.json();
     if(!d.success)return;
     const db=d.dashboard;
     animateCounter(document.getElementById('statPatients'), db.activePatients);
     animateCounter(document.getElementById('statCheckins'), db.todayCheckins);
     animateCounter(document.getElementById('statTasks'), db.pendingTasks);
     animateCounter(document.getElementById('statRisk'), db.atRisk);
-    updateTrendChart(db.weeklyTrend||[]);
+    
+    // Charts
+    updateTrendChart(db.weeklyTrend||[], period);
+    updateAdherenceChart(db.adherence);
+    updatePatientBreakdownChart(db.patientBreakdown||[]);
+    updateComparisonCards(db.comparison, db.todayCheckins);
+    updateSessionStats(db.sessionStats);
+    
+    // Recent activity
     const act=document.getElementById('recentActivity');
     if(!db.recentActivity?.length){renderEmptyState(act,{icon:'📊',title:'Sin actividad reciente',desc:'La actividad de tus pacientes aparecerá aquí cuando registren check-ins o completen tareas.'});return;}
     act.innerHTML=db.recentActivity.map((a,i)=>`<div class="recent-row" style="animation-delay:${i*40}ms"><span>${sanitizeHTML(a.patient_name||'Paciente '+a.patient_id?.slice(0,8))}</span><span>Ánimo: <strong>${a.mood}/10</strong></span><span class="recent-time">${new Date(a.created_at).toLocaleString('es-ES')}</span></div>`).join('');
   }catch(e){console.error(e);}
 }
 
-function updateTrendChart(data){
-  const ctx=document.getElementById('trendChart');if(trendChart)trendChart.destroy();
-  if(!data.length)return;
-  trendChart=new Chart(ctx,{type:'line',data:{labels:data.map(d=>d.day),datasets:[
-    {label:'Ánimo',data:data.map(d=>d.avg_mood),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.1)',tension:.4,fill:true},
-    {label:'Ansiedad',data:data.map(d=>d.avg_anxiety),borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.1)',tension:.4,fill:true}
-  ]},options:{responsive:true,plugins:{legend:{position:'bottom'}},scales:{y:{min:1,max:10}}}});
+function updateTrendChart(data, period){
+  var ctx=document.getElementById('trendChart');if(trendChart)trendChart.destroy();
+  // Limpiar mensaje de estado vacío previo
+  var existingMsg=ctx.parentNode.querySelector('.empty-chart-msg');
+  if(existingMsg) existingMsg.remove();
+  ctx.style.display='';
+  if(!data||!data.length){
+    ctx.style.display='none';
+    var msg=document.createElement('div');
+    msg.className='empty-chart-msg';
+    msg.textContent='No hay suficientes datos para el período seleccionado';
+    ctx.parentNode.appendChild(msg);
+    return;
+  }
+  var periodLabel=period===90?'Últimos 90 días':period===30?'Últimos 30 días':'Últimos 7 días';
+  trendChart=new Chart(ctx,{type:'line',data:{labels:data.map(function(d){return d.day;}),datasets:[
+    {label:'Ánimo',data:data.map(function(d){return d.avg_mood;}),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.08)',tension:.4,fill:true,pointRadius:3},
+    {label:'Ansiedad',data:data.map(function(d){return d.avg_anxiety;}),borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.06)',tension:.4,fill:true,pointRadius:3},
+    {label:'Energía',data:data.map(function(d){return d.avg_energy;}),borderColor:'#10b981',backgroundColor:'rgba(16,185,129,.05)',tension:.4,fill:true,pointRadius:3,borderDash:[4,2]}
+  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:20,font:{size:12}}},title:{display:true,text:periodLabel,font:{size:11,weight:'normal'},color:'var(--muted)'}},scales:{y:{min:1,max:10,ticks:{stepSize:1},grid:{color:'rgba(148,163,184,.1)'}},x:{grid:{display:false}}}},interaction:{mode:'index',intersect:false}}});
+}
+
+function updateAdherenceChart(adherence){
+  var ctx=document.getElementById('adherenceChart');if(adherenceChart)adherenceChart.destroy();
+  var container=document.getElementById('adherenceChartContainer');
+  var existingMsg=container.querySelector('.empty-chart-msg');
+  if(existingMsg) existingMsg.remove();
+  ctx.style.display='';
+  if(!adherence||adherence.total===0){
+    ctx.style.display='none';
+    var msg=document.createElement('div');
+    msg.className='empty-chart-msg';
+    msg.textContent='Sin datos de adherencia en este período';
+    container.appendChild(msg);
+    return;
+  }
+  var pending=adherence.total-adherence.completed;
+  adherenceChart=new Chart(ctx,{type:'doughnut',data:{labels:['Completadas','Pendientes'],datasets:[{data:[adherence.completed,pending],backgroundColor:['#10b981','#f1f5f9'],borderColor:['#10b981','#e2e8f0'],borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,cutout:'65%',plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:20,font:{size:12}}},title:{display:true,text:adherence.rate+'% de adherencia',position:'bottom',font:{size:18,weight:'700'},color:adherence.rate>=70?'#10b981':adherence.rate>=40?'#f59e0b':'#ef4444',padding:0}},layout:{padding:{top:8,bottom:8}}}});
+}
+
+function updatePatientBreakdownChart(patients){
+  var ctx=document.getElementById('patientBreakdownChart');if(patientBreakdownChart)patientBreakdownChart.destroy();
+  var existingMsg=ctx.parentNode.querySelector('.empty-chart-msg');
+  if(existingMsg) existingMsg.remove();
+  ctx.style.display='';
+  if(!patients||!patients.length){
+    ctx.style.display='none';
+    var msg=document.createElement('div');
+    msg.className='empty-chart-msg';
+    msg.textContent='Sin datos de pacientes en este período';
+    ctx.parentNode.appendChild(msg);
+    return;
+  }
+  var topPatients=patients.slice(0,8);
+  patientBreakdownChart=new Chart(ctx,{type:'bar',data:{labels:topPatients.map(function(p){return (p.name||'P'+p.patient_id.slice(0,8)).substring(0,14);}),datasets:[
+    {label:'Ánimo medio',data:topPatients.map(function(p){return p.avg_mood;}),backgroundColor:'rgba(99,102,241,.7)',borderRadius:4},
+    {label:'Ansiedad media',data:topPatients.map(function(p){return p.avg_anxiety;}),backgroundColor:'rgba(239,68,68,.5)',borderRadius:4}
+  ]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,font:{size:12}}}},scales:{x:{min:1,max:10,ticks:{stepSize:1},grid:{color:'rgba(148,163,184,.1)'}},y:{grid:{display:false}}}}});
+}
+
+function updateComparisonCards(comparison, todayCheckins){
+  var container=document.getElementById('comparisonCards');
+  if(!comparison){
+    container.innerHTML='<div class="empty-chart-msg">Sin datos comparativos</div>';
+    return;
+  }
+  var delta=comparison.checkins.delta;
+  var deltaIcon=delta>0?'📈':delta<0?'📉':'➡️';
+  var deltaClass=delta>0?'delta-positive':delta<0?'delta-negative':'delta-neutral';
+  var prevLabel=currentPeriod===90?'90 días anteriores':currentPeriod===30?'30 días anteriores':'7 días anteriores';
+  var currentLabel=currentPeriod===90?'Últimos 90 días':currentPeriod===30?'Últimos 30 días':'Últimos 7 días';
+  container.innerHTML='<div class="comparison-row">'
+    +'<div class="comparison-metric"><div class="comparison-value">'+todayCheckins+'</div><div class="comparison-label">Check-ins hoy</div></div>'
+    +'<div class="comparison-metric"><div class="comparison-value">'+comparison.checkins.current+'</div><div class="comparison-label">'+currentLabel+'</div></div>'
+    +'<div class="comparison-metric"><div class="comparison-value">'+comparison.checkins.previous+'</div><div class="comparison-label">'+prevLabel+'</div></div>'
+    +'<div class="comparison-delta '+deltaClass+'">'+deltaIcon+' '+(delta>=0?'+':'')+delta+' vs período anterior</div>'
+    +'</div>';
+}
+
+function updateSessionStats(sessionStats){
+  var container=document.getElementById('sessionStats');
+  if(!sessionStats||sessionStats.total===0){
+    container.innerHTML='<div class="empty-chart-msg">Sin sesiones en este período</div>';
+    return;
+  }
+  var hours=Math.floor(sessionStats.totalMinutes/60);
+  var mins=sessionStats.totalMinutes%60;
+  container.innerHTML='<div class="session-stats-grid">'
+    +'<div class="session-stat-item"><div class="session-stat-num">'+sessionStats.total+'</div><div class="session-stat-label">Sesiones totales</div></div>'
+    +'<div class="session-stat-item"><div class="session-stat-num">'+sessionStats.completed+'</div><div class="session-stat-label">Completadas</div></div>'
+    +'<div class="session-stat-item"><div class="session-stat-num">'+(hours>0?hours+'h ':'')+mins+'m</div><div class="session-stat-label">Tiempo total</div></div>'
+    +'</div>';
 }
 
 async function loadPatients({force=false}={}){
@@ -2034,6 +2129,20 @@ document.addEventListener('click', function(e){
       case 'close-sidebar': closeSidebar(); break;
       default: console.warn('Unknown data-action:', action);
     }
+    return;
+  }
+
+  // Period selector buttons (data-period)
+  const periodBtn = e.target.closest('[data-period]');
+  if (periodBtn) {
+    const period = parseInt(periodBtn.dataset.period);
+    if (!period) return;
+    // Update active state
+    document.querySelectorAll('.period-btn').forEach(function(b){ b.classList.remove('active'); b.setAttribute('aria-pressed','false'); });
+    periodBtn.classList.add('active');
+    periodBtn.setAttribute('aria-pressed','true');
+    // Reload dashboard with new period
+    loadDashboard(period);
     return;
   }
   

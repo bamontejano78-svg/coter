@@ -109,7 +109,21 @@
 <div class="stat-card"><div class="stat-num" id="statTasks">-</div><div class="stat-label">Tareas pendientes</div></div>
 <div class="stat-card"><div class="stat-num" id="statRisk" style="color:var(--d)">-</div><div class="stat-label">En riesgo</div></div>
 </div>
-<div class="card"><h2>Tendencia semanal</h2><canvas id="trendChart" height="80"></canvas></div>
+<div class="period-selector">
+  <span class="period-label">Mostrar últimos:</span>
+  <button class="period-btn active" data-period="7" aria-pressed="true">7 días</button>
+  <button class="period-btn" data-period="30" aria-pressed="false">30 días</button>
+  <button class="period-btn" data-period="90" aria-pressed="false">90 días</button>
+</div>
+<div class="analytics-grid">
+  <div class="card analytics-card"><h2>Tendencia de ánimo y ansiedad</h2><canvas id="trendChart" height="80"></canvas></div>
+  <div class="card analytics-card"><h2>Adherencia a ejercicios</h2><div id="adherenceChartContainer"><canvas id="adherenceChart" height="80"></canvas></div></div>
+</div>
+<div class="analytics-grid analytics-grid-3">
+  <div class="card analytics-card"><h2>Comparativa de actividad</h2><div id="comparisonCards"></div></div>
+  <div class="card analytics-card"><h2>Sesiones clínicas</h2><div id="sessionStats"></div></div>
+</div>
+<div class="card"><h2>Desglose por paciente</h2><canvas id="patientBreakdownChart" height="60"></canvas></div>
 <div class="card"><h2>Actividad reciente</h2><div id="recentActivity"><div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text xshort"></div></div></div><div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div><div class="skel-row"><div class="skel-row-col"><div class="skeleton skeleton-text" style="width:75%"></div><div class="skeleton skeleton-text xshort"></div></div></div></div></div>
 <div class="card" id="alertsPanel" style="display:none"><h2>🔔 Alertas clínicas <button class="btn btn-sm btn-d" data-action="dismiss-alerts" style="float:right">Marcar todas leídas</button></h2><div id="alertsList"></div></div>
 </div>

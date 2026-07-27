@@ -408,15 +408,32 @@ router.get('/dashboard', authWithBilling, async (req, res) => {
   try {
     const pool = getPool();
     const tid = req.user.id;
+    const period = parseInt(req.query.period) || 7;
+    const days = Math.min(Math.max(period, 7), 90); // clamp 7–90
+    const days2 = days * 2;
+
+    // Todas las queries parametrizadas: $1 = therapist_id, $2 = days (cuando aplica)
+    const interval = "(INTERVAL '1 day' * $2)";
 
     // Ejecutar queries independientes en paralelo
-    const [activeResult, todayResult, taskResult, riskResult, trendResult, recentResult] = await Promise.all([
+    const [
+      activeResult, todayResult, taskResult, riskResult, trendResult, recentResult,
+      adherenceResult, sessionResult, patientBreakdownResult, prevPeriodResult,
+    ] = await Promise.all([
       pool.query("SELECT COUNT(*) as count FROM therapist_patients WHERE therapist_id = $1 AND status = 'active'", [tid]),
       pool.query("SELECT COUNT(*) as count FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id WHERE tp.therapist_id = $1 AND ci.created_at::date = CURRENT_DATE", [tid]),
       pool.query("SELECT COUNT(*) as count FROM assignments a JOIN therapist_patients tp ON tp.patient_id = a.patient_id WHERE tp.therapist_id = $1 AND a.status = 'assigned'", [tid]),
-      pool.query(`SELECT DISTINCT ON (ci.patient_id) ci.mood FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id WHERE tp.therapist_id = $1 ORDER BY ci.patient_id, ci.created_at DESC`, [tid]),
-      pool.query(`SELECT ci.created_at::date as day, ROUND(AVG(ci.mood),1) as avg_mood, ROUND(AVG(ci.anxiety),1) as avg_anxiety, ROUND(AVG(ci.energy),1) as avg_energy, COUNT(*) as checkins FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id WHERE tp.therapist_id = $1 AND ci.created_at >= NOW() - INTERVAL '7 days' GROUP BY ci.created_at::date ORDER BY day ASC`, [tid]),
-      pool.query(`SELECT 'checkin' as type, ci.patient_id, p.name as patient_name, ci.mood, ci.created_at FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id LEFT JOIN patients p ON p.id = ci.patient_id WHERE tp.therapist_id = $1 ORDER BY ci.created_at DESC LIMIT 5`, [tid]),
+      pool.query('SELECT DISTINCT ON (ci.patient_id) ci.mood FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id WHERE tp.therapist_id = $1 ORDER BY ci.patient_id, ci.created_at DESC', [tid]),
+      pool.query('SELECT ci.created_at::date as day, ROUND(AVG(ci.mood),1) as avg_mood, ROUND(AVG(ci.anxiety),1) as avg_anxiety, ROUND(AVG(ci.energy),1) as avg_energy, COUNT(*) as checkins FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id WHERE tp.therapist_id = $1 AND ci.created_at >= NOW() - ' + interval + ' GROUP BY ci.created_at::date ORDER BY day ASC', [tid, days]),
+      pool.query("SELECT 'checkin' as type, ci.patient_id, p.name as patient_name, ci.mood, ci.created_at FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id LEFT JOIN patients p ON p.id = ci.patient_id WHERE tp.therapist_id = $1 ORDER BY ci.created_at DESC LIMIT 5", [tid]),
+      // Adherencia — assignments en el período
+      pool.query("SELECT COUNT(*)::int as total, COUNT(*) FILTER (WHERE a.status = 'completed')::int as completed FROM assignments a JOIN therapist_patients tp ON tp.patient_id = a.patient_id WHERE tp.therapist_id = $1 AND a.created_at >= NOW() - " + interval, [tid, days]),
+      // Sesiones clínicas en el período
+      pool.query('SELECT COUNT(*)::int as total, COUNT(*) FILTER (WHERE cs.status = \'completed\')::int as completed, COALESCE(SUM(cs.duration_min),0)::int as total_min FROM clinical_sessions cs WHERE cs.therapist_id = $1 AND cs.session_date >= NOW() - ' + interval, [tid, days]),
+      // Desglose por paciente — ánimo medio por paciente
+      pool.query('SELECT p.id as patient_id, p.name, ROUND(AVG(ci.mood),1) as avg_mood, ROUND(AVG(ci.anxiety),1) as avg_anxiety, COUNT(*)::int as checkins, MAX(ci.created_at) as last_checkin FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id LEFT JOIN patients p ON p.id = ci.patient_id WHERE tp.therapist_id = $1 AND ci.created_at >= NOW() - ' + interval + ' GROUP BY p.id, p.name ORDER BY avg_mood ASC', [tid, days]),
+      // KPIs del período anterior — $1=tid, $2=days2 (2x period), $3=days (current period)
+      pool.query('SELECT COUNT(*)::int as checkins FROM check_ins ci JOIN therapist_patients tp ON tp.patient_id = ci.patient_id WHERE tp.therapist_id = $1 AND ci.created_at >= NOW() - (INTERVAL \'1 day\' * $2) AND ci.created_at < NOW() - (INTERVAL \'1 day\' * $3)', [tid, days2, days]),
     ]);
 
     const activePatients = parseInt(activeResult.rows[0].count);
@@ -424,7 +441,40 @@ router.get('/dashboard', authWithBilling, async (req, res) => {
     const pendingTasks = parseInt(taskResult.rows[0].count);
     const atRisk = riskResult.rows.filter(r => r.mood <= 3).length;
 
-    res.json({ success: true, dashboard: { activePatients, todayCheckins, pendingTasks, atRisk, weeklyTrend: trendResult.rows, recentActivity: recentResult.rows } });
+    // Adherencia
+    const adherence = {
+      total: adherenceResult.rows[0].total,
+      completed: adherenceResult.rows[0].completed,
+      rate: adherenceResult.rows[0].total > 0 ? Math.round((adherenceResult.rows[0].completed / adherenceResult.rows[0].total) * 100) : 0,
+    };
+
+    // Sesiones
+    const sessionStats = {
+      total: sessionResult.rows[0].total,
+      completed: sessionResult.rows[0].completed,
+      totalMinutes: sessionResult.rows[0].total_min,
+    };
+
+    // Comparación con período anterior
+    const prevCheckins = prevPeriodResult.rows[0].checkins;
+    const currentCheckins = trendResult.rows.reduce((s, r) => s + parseInt(r.checkins), 0);
+    const comparison = {
+      checkins: { current: currentCheckins, previous: prevCheckins, delta: currentCheckins - prevCheckins },
+    };
+
+    res.json({
+      success: true,
+      dashboard: {
+        activePatients, todayCheckins, pendingTasks, atRisk,
+        period: days,
+        weeklyTrend: trendResult.rows,
+        recentActivity: recentResult.rows,
+        adherence,
+        sessionStats,
+        patientBreakdown: patientBreakdownResult.rows,
+        comparison,
+      },
+    });
   } catch (err) {
     logger.error('Error dashboard', { error: err.message });
     res.status(500).json({ success: false });
