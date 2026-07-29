@@ -33,10 +33,17 @@ cd /opt/coter
 ## Paso 2: Configurar variables de entorno
 
 ```bash
-# Copiar y editar el template de producción
-cp .env.production .env
+# Crear .env desde el template
+cp .env.example .env
 nano .env
 ```
+
+> **IMPORTANTE:** En producción, `DATABASE_URL` debe apuntar al contenedor Postgres local,
+> NO a Neon. La arquitectura es autocontenida: cada entorno lleva su propia BD.
+>
+> ```env
+> DATABASE_URL=postgresql://coter:coter@postgres:5432/coter
+> ```
 
 ### Variables críticas (OBLIGATORIAS)
 
