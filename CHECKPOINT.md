@@ -1,7 +1,7 @@
 # 🧠 Coter Pro — Checkpoint de Sesión
 
 **Fecha:** 2026-07-29
-**Último commit:** `e9891d8` (fix: migracion a nuevo disco)
+**Último commit:** `2d442eb` (docs: plan de deploy — Docker + Postgres local)
 **Branch:** `main`
 **Tests:** 295/295 ✅
 
@@ -18,6 +18,8 @@
 | 🩺 **Trial subscription para test** | Insertada fila en `subscriptions` para `ana@coter.com` (estaba bloqueando el billingGuard) |
 | 🔒 **.gitignore actualizado** | Excluye `neon.txt` y `android/app/google-services.json` |
 | 💳 **Stripe Checkout UI** | `www/js/therapist-billing.js`, `www/terapeuta.html`, `www/css/therapist.css` |
+| 🐳 **Plan de deploy** | `CHECKPOINT.md`, `DEPLOY.md` — arquitectura Docker+Postgres local, checklist |
+| ❌ **Deploy staging bloqueado** | Docker Desktop no instalado en esta máquina |
 
 ### 📊 Lo implementado en sesiones anteriores
 
@@ -48,9 +50,13 @@ npm run dev
 - **Paciente:** http://localhost:3000/paciente.html
 - **Admin:** http://localhost:3000/admin.html
 
+### ⚠️ Servidor en ejecución
+El servidor de desarrollo está corriendo en segundo plano (PID 7896, puerto 3000).
+Para detenerlo: `taskkill //F //PID 7896`
+
 ---
 
-## 🚀 PRÓXIMO PASO: Deploy a staging o producción
+## 🚀 PRÓXIMO PASO: Instalar Docker + probar deploy staging
 
 ### ✅ Decisión tomada: Docker + Postgres local
 
@@ -61,6 +67,26 @@ Cada entorno es **autocontenido**: Docker Compose con su propio Postgres, sin de
 | **Dev local** | Neon serverless | No se usa | No se usa | No |
 | **Staging** | Postgres 16 contenedor | `docker-compose.staging.yml` | Self-signed | No |
 | **Producción** | Postgres 16 contenedor | `docker-compose.yml` | Let's Encrypt | ✅ Auto-renew |
+
+### 🔴 Bloqueante: Docker Desktop no instalado
+
+El script `scripts/deploy-staging-local.sh` falla porque `docker` no está en el PATH.
+Para continuar en la próxima sesión:
+
+1. **Instalar Docker Desktop** → https://www.docker.com/products/docker-desktop/
+   - Instalar con opción **WSL 2**
+   - Reiniciar Windows
+   - Verificar: `docker --version` y `docker compose version`
+
+2. **Autenticarse en GHCR:**
+   ```bash
+   echo "TU_GITHUB_TOKEN" | docker login ghcr.io -u bamontejano78-svg --password-stdin
+   ```
+
+3. **Ejecutar deploy staging:**
+   ```bash
+   ./scripts/deploy-staging-local.sh
+   ```
 
 ### Arquitectura de producción
 
