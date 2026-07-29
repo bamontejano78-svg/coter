@@ -55,6 +55,8 @@ certs/
 *.env
 *.env.*
 !*.env.example
+neon.txt
+android/app/google-services.json
 
 # Misc
 *.tmp

@@ -1,7 +1,12 @@
 // En producción (Railway, etc.), las variables vienen del entorno real.
-// Solo cargar dotenv-flow en desarrollo. En prod, process.env ya tiene los valores.
+// Solo cargar .env en desarrollo/test. En prod, process.env ya tiene los valores.
+// override:true carga todas las vars del .env, pero preservamos NODE_ENV
+// del entorno real (ej: NODE_ENV=test) para que tenga prioridad.
 if (process.env.NODE_ENV !== 'production') {
-  require('dotenv-flow').config({ silent: true });
+  const savedNodeEnv = process.env.NODE_ENV;
+  require('dotenv').config({ path: '.env', quiet: true, override: true });
+  // Restore NODE_ENV set via command line (override:true would overwrite it from .env)
+  if (savedNodeEnv) process.env.NODE_ENV = savedNodeEnv;
 }
 
 const logger = require('./logger');
@@ -9,7 +14,7 @@ const logger = require('./logger');
 /**
  * Validación estricta de variables de entorno.
  * En producción, las variables deben estar definidas en el entorno
- * (no en .env). dotenv-flow carga .env solo en development.
+ * (no en .env).
  */
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
