@@ -11,8 +11,8 @@ if (config.ENCRYPTION_KEY) {
   } else {
     logger.info('Encriptacion AES-256-GCM activada');
   }
-} else if (!config.isProd) {
-  logger.warn('ENCRYPTION_KEY no configurada - datos sensibles SIN encriptar');
+} else if (!config.isSecureDeployment) {
+  logger.warn('ENCRYPTION_KEY no configurada - se rechazaran escrituras de datos sensibles');
 }
 
 // Lazy key resolution. config/env.js captures ENCRYPTION_KEY at module-load
@@ -48,7 +48,11 @@ function loadKey() {
 function encrypt(text) {
   if (!text) return text;
   const keyBuf = loadKey();
-  if (!keyBuf) return text;
+  if (!keyBuf) {
+    const error = new Error('ENCRYPTION_KEY is required to store sensitive data');
+    error.code = 'ENCRYPTION_KEY_REQUIRED';
+    throw error;
+  }
   const iv = crypto.randomBytes(16);
   const cipher = crypto.createCipheriv(ALGORITHM, keyBuf, iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
@@ -82,7 +86,19 @@ function decrypt(encryptedText) {
 
 function decryptCheckIns(checkIns) {
   if (!checkIns || !Array.isArray(checkIns)) return checkIns;
-  return checkIns.map(c => ({ ...c, thoughts: decrypt(c.thoughts) }));
+  return checkIns.map(c => {
+    const decryptedEmotions = decrypt(c.emotions);
+    let emotions = [];
+    if (decryptedEmotions) {
+      try {
+        const parsed = JSON.parse(decryptedEmotions);
+        emotions = Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        emotions = [];
+      }
+    }
+    return { ...c, thoughts: decrypt(c.thoughts), emotions };
+  });
 }
 
 function decryptMessages(messages) {
@@ -95,4 +111,32 @@ function decryptAssignments(assignments) {
   return assignments.map(a => ({ ...a, instructions: decrypt(a.instructions) }));
 }
 
-module.exports = { encrypt, decrypt, decryptCheckIns, decryptMessages, decryptAssignments };
+function decryptClinicalNotes(notes) {
+  if (!notes || !Array.isArray(notes)) return notes;
+  return notes.map(n => ({
+    ...n,
+    subjective: decrypt(n.subjective),
+    objective: decrypt(n.objective),
+    assessment: decrypt(n.assessment),
+    plan: decrypt(n.plan),
+  }));
+}
+
+function decryptClinicalSessions(sessions) {
+  if (!sessions || !Array.isArray(sessions)) return sessions;
+  return sessions.map(s => ({
+    ...s,
+    notes_summary: decrypt(s.notes_summary),
+    notes: Array.isArray(s.notes) ? decryptClinicalNotes(s.notes) : s.notes,
+  }));
+}
+
+module.exports = {
+  encrypt,
+  decrypt,
+  decryptCheckIns,
+  decryptMessages,
+  decryptAssignments,
+  decryptClinicalNotes,
+  decryptClinicalSessions,
+};

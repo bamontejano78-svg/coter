@@ -1,7 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { getPool } = require('../database');
-const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
+const { getPool, withTransaction } = require('../database');
+const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments, decryptClinicalNotes, decryptClinicalSessions } = require('../utils/encryption');
 // checkTaskReminders fue eliminado: los recordatorios ahora los genera el cron
 // job utils/taskScheduler.runTick → runAllPendingReminders en background.
 // Mantener este GET como endpoint idempotente (REST): solo lee.
@@ -25,34 +25,46 @@ router.post('/connect', async (req, res) => {
     const { connection_code } = req.body;
     if (!connection_code) return res.status(400).json({ error: 'Codigo de conexion requerido' });
 
-    const pool = getPool();
-    const { rows: codeRows } = await pool.query(
-      `SELECT cc.*, t.name as therapist_name, t.specialty, cc.patient_name FROM connection_codes cc
-       JOIN therapists t ON cc.therapist_id = t.id
-       WHERE cc.code = $1 AND cc.is_active = TRUE AND cc.uses < cc.max_uses AND cc.expires_at > NOW()`,
-      [connection_code]
-    );
-
-    if (codeRows.length === 0) return res.status(400).json({ error: 'Codigo invalido o expirado' });
-
-    const codeData = codeRows[0];
     const patientId = uuidv4();
-    const patientName = codeData.patient_name || null;
     const authToken = uuidv4(); // Token de autenticación para el paciente
+    let codeData;
 
-    const insertSql = patientName
-      ? "INSERT INTO patients (id, name, status, auth_token) VALUES ($1, $2, 'active', $3)"
-      : "INSERT INTO patients (id, status, auth_token) VALUES ($1, 'active', $2)";
-    const insertParams = patientName ? [patientId, patientName, authToken] : [patientId, authToken];
-    await pool.query(insertSql, insertParams);
+    await withTransaction(async (client) => {
+      // Bloquear el código durante el canje evita que dos solicitudes
+      // concurrentes superen max_uses.
+      const { rows: codeRows } = await client.query(
+        `SELECT cc.*, t.name as therapist_name, t.specialty, cc.patient_name
+           FROM connection_codes cc
+           JOIN therapists t ON cc.therapist_id = t.id
+          WHERE cc.code = $1 AND cc.is_active = TRUE
+            AND cc.uses < cc.max_uses AND cc.expires_at > NOW()
+          FOR UPDATE`,
+        [connection_code]
+      );
+      if (codeRows.length === 0) {
+        const invalidCode = new Error('Codigo invalido o expirado');
+        invalidCode.code = 'CONNECTION_CODE_INVALID';
+        throw invalidCode;
+      }
 
-    const linkId = uuidv4();
-    await pool.query(
-      'INSERT INTO therapist_patients (id, therapist_id, patient_id, connection_code) VALUES ($1, $2, $3, $4)',
-      [linkId, codeData.therapist_id, patientId, connection_code]
-    );
+      codeData = codeRows[0];
+      const resolvedPatientName = codeData.patient_name || null;
+      const insertSql = resolvedPatientName
+        ? "INSERT INTO patients (id, name, status, auth_token) VALUES ($1, $2, 'active', $3)"
+        : "INSERT INTO patients (id, status, auth_token) VALUES ($1, 'active', $2)";
+      const insertParams = resolvedPatientName
+        ? [patientId, resolvedPatientName, authToken]
+        : [patientId, authToken];
+      await client.query(insertSql, insertParams);
 
-    await pool.query('UPDATE connection_codes SET uses = uses + 1 WHERE id = $1', [codeData.id]);
+      await client.query(
+        'INSERT INTO therapist_patients (id, therapist_id, patient_id, connection_code) VALUES ($1, $2, $3, $4)',
+        [uuidv4(), codeData.therapist_id, patientId, connection_code]
+      );
+      await client.query('UPDATE connection_codes SET uses = uses + 1 WHERE id = $1', [codeData.id]);
+    });
+
+    const resolvedPatientName = codeData.patient_name || null;
 
     audit({ who: patientId, role: 'patient', action: 'connect', resource: 'patient', resourceId: patientId, ip: req.ip, metadata: { therapistId: codeData.therapist_id, code: connection_code } });
 
@@ -60,7 +72,7 @@ router.post('/connect', async (req, res) => {
     // Si tiene el dashboard abierto, verá aparecer el paciente en su lista
     // sin necesidad de recargar.
     bus.publish(bus.topicFor('therapist', codeData.therapist_id), 'patient:connected', {
-      patientId, patientName: patientName || null, at: new Date().toISOString(),
+      patientId, patientName: resolvedPatientName, at: new Date().toISOString(),
     });
 
     setPatientCookie(res, authToken);
@@ -73,6 +85,9 @@ router.post('/connect', async (req, res) => {
       connected_at: new Date().toISOString(),
     });
   } catch (err) {
+    if (err.code === 'CONNECTION_CODE_INVALID') {
+      return res.status(400).json({ error: err.message });
+    }
     logger.error('Error conectando paciente', { error: err.message });
     res.status(500).json({ error: 'Error al conectar' });
   }
@@ -90,13 +105,39 @@ router.use('/:patientId', authenticatePatient);
 router.post('/:patientId/check-ins', async (req, res) => {
   try {
     const { patientId } = req.params;
-    const { mood, anxiety, energy, thoughts } = req.body;
+    const { mood, anxiety, energy, thoughts, sleep_hours, sleep_quality, emotions } = req.body;
     if (mood === undefined || mood === null || anxiety === undefined || anxiety === null) {
       return res.status(400).json({ error: 'Mood y anxiety requeridos' });
     }
-    const effectiveEnergy = energy === undefined || energy === null ? 5 : energy;
+    const normalizedMood = Number(mood);
+    const normalizedAnxiety = Number(anxiety);
+    const normalizedEnergy = energy === undefined || energy === null ? 5 : Number(energy);
+    const normalizedSleepHours = sleep_hours === undefined || sleep_hours === null || sleep_hours === '' ? null : Number(sleep_hours);
+    const normalizedSleepQuality = sleep_quality === undefined || sleep_quality === null || sleep_quality === '' ? null : Number(sleep_quality);
+    if (![normalizedMood, normalizedAnxiety, normalizedEnergy].every(v => Number.isInteger(v) && v >= 1 && v <= 10)) {
+      return res.status(400).json({ error: 'Los valores deben estar entre 1 y 10' });
+    }
+    if (normalizedSleepHours !== null && (!Number.isFinite(normalizedSleepHours) || normalizedSleepHours < 0 || normalizedSleepHours > 24)) {
+      return res.status(400).json({ error: 'Las horas de sueño no son válidas' });
+    }
+    if (normalizedSleepQuality !== null && (!Number.isInteger(normalizedSleepQuality) || normalizedSleepQuality < 1 || normalizedSleepQuality > 10)) {
+      return res.status(400).json({ error: 'La calidad del sueño debe estar entre 1 y 10' });
+    }
+    const normalizedEmotions = Array.isArray(emotions) ? emotions.filter(e => typeof e === 'string').slice(0, 8) : [];
 
     const pool = getPool();
+    const { rows: recentRows } = await pool.query(
+      `SELECT id FROM check_ins
+        WHERE patient_id = $1 AND created_at >= NOW() - INTERVAL '10 minutes'
+          AND mood = $2 AND anxiety = $3 AND energy = $4
+          AND COALESCE(sleep_hours, -1) = COALESCE($5::numeric, -1)
+          AND COALESCE(sleep_quality, -1) = COALESCE($6::integer, -1)
+        ORDER BY created_at DESC LIMIT 1`,
+      [patientId, normalizedMood, normalizedAnxiety, normalizedEnergy, normalizedSleepHours, normalizedSleepQuality]
+    );
+    if (recentRows.length > 0) {
+      return res.json({ success: true, duplicate: true, check_in_id: recentRows[0].id, message: 'Este check-in ya estaba guardado' });
+    }
     const { rows: connRows } = await pool.query(
       "SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'",
       [patientId]
@@ -104,14 +145,14 @@ router.post('/:patientId/check-ins', async (req, res) => {
     const therapistId = connRows.length > 0 ? connRows[0].therapist_id : null;
     const id = uuidv4();
     await pool.query(
-      'INSERT INTO check_ins (id, patient_id, mood, anxiety, energy, thoughts) VALUES ($1, $2, $3, $4, $5, $6)',
-      [id, patientId, mood, anxiety, effectiveEnergy, encrypt(thoughts || '')]
+      'INSERT INTO check_ins (id, patient_id, mood, anxiety, energy, thoughts, sleep_hours, sleep_quality, emotions) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [id, patientId, normalizedMood, normalizedAnxiety, normalizedEnergy, encrypt(thoughts || ''), normalizedSleepHours, normalizedSleepQuality, encrypt(JSON.stringify(normalizedEmotions))]
     );
-    audit({ who: patientId, role: 'patient', action: 'create_checkin', resource: 'check_in', resourceId: id, ip: req.ip, metadata: { mood, anxiety, energy: effectiveEnergy } });
+    audit({ who: patientId, role: 'patient', action: 'create_checkin', resource: 'check_in', resourceId: id, ip: req.ip, metadata: { mood: normalizedMood, anxiety: normalizedAnxiety, energy: normalizedEnergy, sleep_quality: normalizedSleepQuality } });
 
     if (therapistId) {
       bus.publish(bus.topicFor('therapist', therapistId), 'checkin:new', {
-        patientId, checkInId: id, mood, anxiety, energy: effectiveEnergy,
+        patientId, checkInId: id, mood: normalizedMood, anxiety: normalizedAnxiety, energy: normalizedEnergy,
       });
     }
 
@@ -159,12 +200,21 @@ router.get('/:patientId/messages', async (req, res) => {
       [patientId, limit, offset]
     );
 
+    const { rows: unreadRows } = await pool.query(
+      'SELECT COUNT(*)::int AS unread FROM messages WHERE patient_id = $1 AND is_therapist = TRUE AND COALESCE(read, FALSE) = FALSE',
+      [patientId]
+    );
+    await pool.query(
+      'UPDATE messages SET read = TRUE WHERE patient_id = $1 AND is_therapist = TRUE AND COALESCE(read, FALSE) = FALSE',
+      [patientId]
+    );
+
     const { rows: countRows } = await pool.query(
       'SELECT COUNT(*) as total FROM messages WHERE patient_id = $1',
       [patientId]
     );
 
-    res.json({ success: true, messages: decryptMessages(rows), pagination: { limit, offset, total: parseInt(countRows[0].total) } });
+    res.json({ success: true, messages: decryptMessages(rows), unread_count: 0, newly_read_count: unreadRows[0].unread, pagination: { limit, offset, total: parseInt(countRows[0].total) } });
   } catch (err) {
     logger.error('Error cargando mensajes', { error: err.message });
     res.status(500).json({ error: 'Error al cargar' });
@@ -201,10 +251,11 @@ router.post('/:patientId/messages', async (req, res) => {
       patientId, messageId, from: 'patient',
     });
 
-    // Push notification nativa (FCM) al terapeuta — best-effort
+    // Push notification nativa (FCM) al terapeuta — best-effort.
+    // No enviar texto clinico al sistema operativo/lock screen.
     fcm.sendToTherapist(therapistId, {
       title: 'Nuevo mensaje de tu paciente',
-      body: message.length > 80 ? message.substring(0, 80) + '...' : message,
+      body: 'Abre Coter Pro para leerlo de forma segura.',
     }).catch(err => logger.warn('[Push] Error enviando push al terapeuta', { error: err.message, therapistId }));
 
     res.json({ success: true, message_id: messageId, message: 'Mensaje enviado' });
@@ -219,8 +270,10 @@ router.get('/:patientId/assignments', async (req, res) => {
   try {
     const { patientId } = req.params;
     const pool = getPool();
+    const status = String(req.query.status || 'assigned').toLowerCase();
+    const statusFilter = status === 'all' ? '' : " AND status = 'assigned'";
     const { rows } = await pool.query(
-      "SELECT * FROM assignments WHERE patient_id = $1 AND status = 'assigned' ORDER BY created_at DESC",
+      `SELECT * FROM assignments WHERE patient_id = $1${statusFilter} ORDER BY CASE WHEN status = 'assigned' THEN 0 ELSE 1 END, due_date ASC NULLS LAST, created_at DESC`,
       [patientId]
     );
     const decrypted = decryptAssignments(rows);
@@ -275,10 +328,13 @@ router.put('/:patientId/assignments/:assignmentId', async (req, res) => {
       "SELECT therapist_id FROM therapist_patients WHERE patient_id = $1 AND status = 'active'",
       [patientId]
     );
-    await pool.query(
-      "UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1 AND patient_id = $2",
+    const completion = await pool.query(
+      "UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1 AND patient_id = $2 AND status = 'assigned'",
       [assignmentId, patientId]
     );
+    if (completion.rowCount === 0) {
+      return res.status(404).json({ success: false, error: 'Tarea no encontrada o ya completada' });
+    }
     if (connRows.length > 0) {
       bus.publish(bus.topicFor('therapist', connRows[0].therapist_id), 'task:completed', {
         patientId, assignmentId,
@@ -365,10 +421,11 @@ router.get('/:patientId/progress', async (req, res) => {
       'SELECT subjective, assessment, created_at FROM clinical_notes WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 1',
       [patientId]
     );
-    const text = latestNoteRows.length > 0 ? (latestNoteRows[0].assessment || latestNoteRows[0].subjective || '') : '';
+    const latestNotes = decryptClinicalNotes(latestNoteRows);
+    const text = latestNotes.length > 0 ? (latestNotes[0].assessment || latestNotes[0].subjective || '') : '';
     const latestNote = latestNoteRows.length > 0 ? {
       excerpt: text.length > 200 ? text.substring(0, 200).replace(/\s+\S*$/, '') + '...' : text,
-      date: latestNoteRows[0].created_at,
+      date: latestNotes[0].created_at,
     } : null;
 
     const { rows: noteCountRow } = await pool.query(
@@ -465,9 +522,12 @@ router.get('/:patientId/notifications', async (req, res) => {
       'SELECT COUNT(*) as total FROM notifications WHERE patient_id = $1',
       [patientId]
     );
+    const { rows: unreadRows } = await pool.query(
+      'SELECT COUNT(*)::int AS unread FROM notifications WHERE patient_id = $1 AND is_read = FALSE',
+      [patientId]
+    );
 
-    const unreadCount = rows.filter(n => !n.is_read).length;
-    res.json({ success: true, notifications: rows, unread_count: unreadCount, pagination: { limit, offset, total: parseInt(countRows[0].total) } });
+    res.json({ success: true, notifications: rows, unread_count: unreadRows[0].unread, pagination: { limit, offset, total: parseInt(countRows[0].total) } });
   } catch (err) {
     logger.error('Error notificaciones', { error: err.message });
     res.status(500).json({ success: false });
@@ -727,20 +787,33 @@ router.post('/:patientId/sessions/:sid/complete', async (req, res) => {
     // defeating the whole purpose of encryptFieldsForKind. (Audited 2026-06.)
     // ────────────────────────────────────────────────────────────────────
     const reEncoded = encryptFieldsForKind(merged, schema);
-    await pool.query(
-      `UPDATE exercise_sessions
-          SET is_complete = TRUE, completed_at = NOW(),
-              responses = $1::jsonb, encrypted_blob = $2
-        WHERE id = $3`,
-      [JSON.stringify(reEncoded.responses), reEncoded.encrypted_blob, sid]
-    );
-    // Marcar también el assignment para que la query
-    //   SELECT * FROM assignments WHERE status = 'assigned'
-    // deje de devolverlo en /:patientId/assignments.
-    await pool.query(
-      `UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1`,
-      [sess.assignment_id]
-    );
+    await withTransaction(async (client) => {
+      const sessionResult = await client.query(
+        `UPDATE exercise_sessions
+            SET is_complete = TRUE, completed_at = NOW(),
+                responses = $1::jsonb, encrypted_blob = $2
+          WHERE id = $3 AND is_complete = FALSE`,
+        [JSON.stringify(reEncoded.responses), reEncoded.encrypted_blob, sid]
+      );
+      if (sessionResult.rowCount !== 1) {
+        const conflict = new Error('La sesión ya está finalizada');
+        conflict.code = 'EXERCISE_COMPLETION_CONFLICT';
+        throw conflict;
+      }
+
+      // Mantener session y assignment atómicos: nunca debe quedar una
+      // sesión finalizada con la tarea todavía pendiente (o al revés).
+      const assignmentResult = await client.query(
+        `UPDATE assignments SET status = 'completed', completed_at = NOW()
+          WHERE id = $1 AND status = 'assigned'`,
+        [sess.assignment_id]
+      );
+      if (assignmentResult.rowCount !== 1) {
+        const conflict = new Error('La tarea ya está finalizada');
+        conflict.code = 'EXERCISE_COMPLETION_CONFLICT';
+        throw conflict;
+      }
+    });
 
     audit({ who: patientId, role: 'patient', action: 'complete_exercise_session', resource: 'exercise_session', resourceId: sid, ip: req.ip, metadata: { assignmentId: sess.assignment_id, exerciseKind: sess.exercise_kind } });
 
@@ -779,6 +852,9 @@ router.post('/:patientId/sessions/:sid/complete', async (req, res) => {
       completed_at: now.toISOString(),
     });
   } catch (err) {
+    if (err.code === 'EXERCISE_COMPLETION_CONFLICT') {
+      return res.status(409).json({ error: err.message });
+    }
     logger.error('Error completando sesión de ejercicio', { error: err.message });
     res.status(500).json({ error: 'Error al completar' });
   }
@@ -812,12 +888,27 @@ router.post('/:patientId/widget-complete', async (req, res) => {
 
     // Verificar que la tarea existe y pertenece al paciente
     const { rows: aRows } = await pool.query(
-      `SELECT id, status FROM assignments WHERE id = $1 AND patient_id = $2`,
+      `SELECT id, status, exercise_kind FROM assignments WHERE id = $1 AND patient_id = $2`,
       [assignment_id, patientId]
     );
     if (aRows.length === 0) return res.status(404).json({ error: 'Tarea no encontrada' });
     if (aRows[0].status !== 'assigned') {
       return res.status(400).json({ error: 'La tarea ya está finalizada' });
+    }
+    // Los widgets son el flujo legacy de assignments classic. Las tareas
+    // clínicas/estructuradas deben pasar por start → autosave → complete,
+    // donde se valida el schema y los campos required.
+    if (aRows[0].exercise_kind !== 'classic') {
+      return res.status(400).json({ error: 'Los widgets solo aplican a tareas classic' });
+    }
+
+    const allowedWidgetKinds = new Set([
+      'widget_thought_record_lite', 'widget_socratic_dialogue', 'widget_distortion_detective',
+      'widget_ba_activity_diary', 'widget_ba_weekly_plan', 'widget_ba_pleasant_activities',
+      'widget_exposure_hierarchy', 'widget_exposure_log', 'widget_interactive_grounding',
+    ]);
+    if (!allowedWidgetKinds.has(exercise_kind)) {
+      return res.status(400).json({ error: 'exercise_kind de widget inválido' });
     }
 
     const sessionId = uuidv4();
@@ -825,18 +916,31 @@ router.post('/:patientId/widget-complete', async (req, res) => {
       ? widget_responses
       : {};
 
-    // Crear sesión ya completada con las respuestas del widget
-    await pool.query(
-      `INSERT INTO exercise_sessions (id, assignment_id, patient_id, exercise_kind, responses, is_complete, completed_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, TRUE, NOW())`,
-      [sessionId, assignment_id, patientId, exercise_kind, JSON.stringify(responses)]
-    );
+    // Los widgets pueden contener texto clínico libre. No conocemos el
+    // esquema interno de cada widget en esta ruta, así que ciframos el
+    // payload completo y dejamos JSONB vacío para no persistir PHI en claro.
+    // exerciseHelpers descifra el blob al mostrarlo al terapeuta.
+    const encryptedWidgetBlob = encrypt(JSON.stringify(responses));
 
-    // Marcar assignment como completado
-    await pool.query(
-      `UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1`,
-      [assignment_id]
-    );
+    // Crear sesión y marcar assignment como completado en una única
+    // transacción. El filtro de estado evita completar dos veces por carrera.
+    await withTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO exercise_sessions (id, assignment_id, patient_id, exercise_kind, responses, encrypted_blob, is_complete, completed_at)
+         VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, TRUE, NOW())`,
+        [sessionId, assignment_id, patientId, exercise_kind, encryptedWidgetBlob]
+      );
+      const assignmentResult = await client.query(
+        `UPDATE assignments SET status = 'completed', completed_at = NOW()
+          WHERE id = $1 AND patient_id = $2 AND status = 'assigned'`,
+        [assignment_id, patientId]
+      );
+      if (assignmentResult.rowCount !== 1) {
+        const conflict = new Error('La tarea ya está finalizada');
+        conflict.code = 'WIDGET_COMPLETION_CONFLICT';
+        throw conflict;
+      }
+    });
 
     audit({ who: patientId, role: 'patient', action: 'complete_widget_session', resource: 'exercise_session', resourceId: sessionId, ip: req.ip, metadata: { assignmentId: assignment_id, exerciseKind: exercise_kind } });
 
@@ -857,10 +961,157 @@ router.post('/:patientId/widget-complete', async (req, res) => {
       assignment_id: assignment_id,
       exercise_kind: exercise_kind,
       completed_at: new Date().toISOString(),
+      responses_encrypted: true,
     });
   } catch (err) {
+    if (err.code === 'WIDGET_COMPLETION_CONFLICT') {
+      return res.status(409).json({ error: err.message });
+    }
     logger.error('Error completando widget session', { error: err.message });
     res.status(500).json({ error: 'Error al guardar el ejercicio' });
+  }
+});
+
+// ─── EXPORTACIÓN DE DATOS (RGPD — derecho de portabilidad) ────
+// Devuelve un JSON descargable con todos los datos del paciente.
+// Los textos sensibles se descifran antes de entregarlos al titular.
+router.get('/:patientId/export', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const pool = getPool();
+
+    const [
+      patientRes,
+      therapistRes,
+      checkInsRes,
+      messagesRes,
+      assignmentsRes,
+      goalsRes,
+      sessionsRes,
+      notesRes,
+      clinicalSessionsRes,
+      notificationsRes,
+    ] = await Promise.all([
+      pool.query('SELECT id, name, email, phone, birth_date, status, created_at, updated_at FROM patients WHERE id = $1', [patientId]),
+      pool.query(
+        `SELECT t.id, t.name, t.specialty, tp.status AS connection_status, tp.connected_at
+           FROM therapist_patients tp
+           JOIN therapists t ON t.id = tp.therapist_id
+          WHERE tp.patient_id = $1`,
+        [patientId]
+      ),
+      pool.query('SELECT * FROM check_ins WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]),
+      pool.query('SELECT id, therapist_id, message, created_at FROM messages WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]),
+      pool.query('SELECT * FROM assignments WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]),
+      pool.query('SELECT * FROM goals WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]),
+      pool.query('SELECT * FROM exercise_sessions WHERE patient_id = $1 ORDER BY completed_at ASC, created_at ASC', [patientId]),
+      pool.query('SELECT * FROM clinical_notes WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]),
+      pool.query('SELECT * FROM clinical_sessions WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]),
+      pool.query('SELECT id, type, title, message, is_read, created_at FROM notifications WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]),
+    ]);
+
+    if (patientRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Paciente no encontrado' });
+    }
+
+    // Descifrar textos sensibles antes de entregarlos al titular
+    const checkIns = decryptCheckIns(checkInsRes.rows).map(({ patient_id, ...rest }) => rest);
+    const messages = decryptMessages(messagesRes.rows).map(({ patient_id, ...rest }) => rest);
+    const assignments = decryptAssignments(assignmentsRes.rows).map(({ patient_id, ...rest }) => rest);
+    const clinicalNotes = decryptClinicalNotes(notesRes.rows).map(({ patient_id, ...rest }) => rest);
+    const clinicalSessions = decryptClinicalSessions(clinicalSessionsRes.rows).map(({ patient_id, ...rest }) => rest);
+
+    // Sesiones de ejercicios: fusionar responses + blob cifrado (igual que en
+    // el panel del terapeuta, para que el export sea legible).
+    const assignmentById = new Map(assignmentsRes.rows.map(a => [a.id, a]));
+    const sessions = sessionsRes.rows.map(s => {
+      const asg = assignmentById.get(s.assignment_id) || null;
+      const responses = asg ? decodeSessionResponses(s, asg) : (s.responses || {});
+      return {
+        id: s.id,
+        assignment_id: s.assignment_id,
+        exercise_kind: s.exercise_kind,
+        is_complete: s.is_complete,
+        started_at: s.started_at,
+        completed_at: s.completed_at,
+        created_at: s.created_at,
+        responses,
+      };
+    });
+
+    const exportData = {
+      format: 'coter-patient-export',
+      version: 1,
+      generated_at: new Date().toISOString(),
+      patient: patientRes.rows[0],
+      therapist: therapistRes.rows,
+      check_ins: checkIns,
+      messages,
+      assignments,
+      goals: goalsRes.rows,
+      exercise_sessions: sessions,
+      clinical_notes: clinicalNotes,
+      clinical_sessions: clinicalSessions,
+      notifications: notificationsRes.rows,
+    };
+
+    auditAccess(req, 'export_patient_data', patientId);
+
+    const body = JSON.stringify(exportData, null, 2);
+    const filename = 'coter-datos-' + new Date().toISOString().slice(0, 10) + '.json';
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"');
+    res.setHeader('Content-Length', Buffer.byteLength(body));
+    res.send(body);
+  } catch (err) {
+    logger.error('Error exportando datos del paciente', { error: err.message });
+    res.status(500).json({ error: 'Error al exportar los datos' });
+  }
+});
+
+// ─── BORRADO DE DATOS (RGPD — derecho de supresión) ───────────
+// Elimina al paciente y todos sus datos (las FK cascada cubren check-ins,
+// mensajes, tareas, objetivos, sesiones, notas, alertas y tokens push).
+// Exige confirmación explícita para evitar borrados accidentales y notifica
+// al terapeuta en tiempo real.
+router.post('/:patientId/delete', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const confirm = (req.body && req.body.confirm) ? String(req.body.confirm).trim().toUpperCase() : '';
+    if (confirm !== 'BORRAR') {
+      return res.status(400).json({ error: 'Confirma la eliminación escribiendo BORRAR' });
+    }
+
+    const pool = getPool();
+
+    // Capturar el terapeuta antes de borrar (para poder notificarle)
+    const { rows: connRows } = await pool.query(
+      `SELECT tp.therapist_id, t.name AS therapist_name
+         FROM therapist_patients tp
+         JOIN therapists t ON t.id = tp.therapist_id
+        WHERE tp.patient_id = $1 AND tp.status = 'active'`,
+      [patientId]
+    );
+    const therapistId = connRows.length > 0 ? connRows[0].therapist_id : null;
+
+    await pool.query('DELETE FROM patients WHERE id = $1', [patientId]);
+
+    if (therapistId) {
+      bus.publish(bus.topicFor('therapist', therapistId), 'patient:deleted', {
+        patientId,
+        at: new Date().toISOString(),
+      });
+    }
+
+    audit({
+      who: patientId, role: 'patient', action: 'delete_account', resource: 'patient', resourceId: patientId, ip: req.ip,
+      metadata: { therapistId, therapistName: connRows.length > 0 ? connRows[0].therapist_name : null },
+    });
+    clearPatientCookie(res);
+    res.json({ success: true, message: 'Tus datos han sido eliminados' });
+  } catch (err) {
+    logger.error('Error eliminando datos del paciente', { error: err.message });
+    res.status(500).json({ error: 'Error al eliminar los datos' });
   }
 });
 

@@ -9,6 +9,11 @@
 const isLocalDev = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.protocol === 'http:';
 const API = isLocalDev ? 'http://localhost:3000/api/v1' : '/api/v1';
 let patientId=null,patientData=null,moodChart=null,authToken=null;
+let taskFilter='pending';
+let taskCache=[];
+let deferredInstallPrompt=null;
+let isSubmittingCheckin=false;
+const OFFLINE_COMPLETIONS_KEY='coter_patient_pending_completions';
 let sseConnection=null;
 let sseReconnectTimer=null;
 let sseBackoffMs=0;
@@ -41,10 +46,20 @@ function animateCounter(el, target, duration = 600) {
   requestAnimationFrame(update);
 }
 
-const saved=localStorage.getItem('patientConnection');
-if(saved){try{patientData=JSON.parse(saved);patientId=patientData.patient_id;authToken=patientData.auth_token||null;showMainScreen();loadEverything();}catch(e){localStorage.removeItem('patientConnection');}}
+// La conexión se mantiene solo durante la sesión del navegador. El cookie httpOnly
+// sigue siendo la credencial principal; no guardamos identidad clínica en localStorage.
+const saved=sessionStorage.getItem('patientConnection') || localStorage.getItem('patientConnection');
+if(saved){try{patientData=JSON.parse(saved);patientId=patientData.patient_id;authToken=patientData.auth_token||null;sessionStorage.setItem('patientConnection',saved);localStorage.removeItem('patientConnection');showMainScreen();loadEverything();}catch(e){sessionStorage.removeItem('patientConnection');localStorage.removeItem('patientConnection');}}
 
-function updateSlider(id){document.getElementById(id+'Val').textContent=document.getElementById(id).value;}
+function updateSlider(id){
+  const input=document.getElementById(id);
+  const output=document.getElementById(id+'Val');
+  if(!input||!output)return;
+  const value=input.value;
+  output.textContent=value+'/10';
+  input.setAttribute('aria-valuenow',value);
+  input.setAttribute('aria-valuetext',value+'/10 — '+(id==='mood'?'ánimo':id==='anxiety'?'ansiedad':'energía'));
+}
 
 async function connect(){
   const code=document.getElementById('codeInput').value.trim().toUpperCase();
@@ -52,7 +67,7 @@ async function connect(){
   try{
     const r=await fetch(`${API}/patients/connect`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({connection_code:code})});
     const d=await r.json();
-    if(d.success){patientData={...d};patientId=d.patient_id;authToken=d.auth_token;const stored={...d};delete stored.auth_token;localStorage.setItem('patientConnection',JSON.stringify(stored));showMainScreen();loadEverything();toastMsg(`¡Conectado con ${d.therapist.name}!`);}
+    if(d.success){patientData={...d};patientId=d.patient_id;authToken=d.auth_token;const stored={...d};delete stored.auth_token;sessionStorage.setItem('patientConnection',JSON.stringify(stored));showMainScreen();loadEverything();toastMsg(`¡Conectado con ${d.therapist.name}!`);}
     else toastMsg(d.error||'Código inválido','error');
   }catch(e){toastMsg('Error de conexión con el servidor','error');}
 }
@@ -61,10 +76,40 @@ function showMainScreen(){
   document.getElementById('connectScreen').classList.add('hidden');
   document.getElementById('mainScreen').classList.remove('hidden');
   document.getElementById('therapistName').textContent=patientData.therapist.name;
+  document.body.classList.add('patient-active');
+}
+
+function showConnectScreen(){
+  disconnectSSE();
+  sessionStorage.removeItem('patientConnection');
+  localStorage.removeItem('patientConnection');
+  patientId=null; patientData=null; authToken=null;
+  document.getElementById('mainScreen')?.classList.add('hidden');
+  document.getElementById('connectScreen')?.classList.remove('hidden');
+  toastMsg('Tu sesión ha caducado. Vuelve a conectar tu espacio','error');
+}
+
+function registerPatientServiceWorker(){
+  if('serviceWorker' in navigator){ navigator.serviceWorker.register('/patient-sw.js').catch(()=>{}); }
+  window.addEventListener('beforeinstallprompt',function(e){
+    e.preventDefault(); deferredInstallPrompt=e;
+    document.getElementById('installBanner')?.classList.remove('hidden');
+  });
+}
+
+async function installPatientApp(){
+  if(!deferredInstallPrompt)return;
+  deferredInstallPrompt.prompt();
+  try{await deferredInstallPrompt.userChoice;}catch(e){}
+  deferredInstallPrompt=null;
+  document.getElementById('installBanner')?.classList.add('hidden');
 }
 
 async function loadEverything(){
+  registerPatientServiceWorker();
+  syncOfflineCompletions();
   loadMessages();loadTasks();loadGoals();loadStats();loadNotifications();loadProgress();
+  updateDailySummary();
   // Polling lento solo para stats y progreso (visual; los mensajes y notificaciones
   // llegan por SSE en tiempo real — ver connectSSE). El dashboard del paciente es
   // mayormente estático y un refresco cada 30s es suficiente para mantener
@@ -215,25 +260,84 @@ function authHeaders(includeContentType=true){
   return headers;
 }
 
-function authFetch(url, opts={}){
-  return fetch(url,{...opts,credentials:'include',headers:{...authHeaders(!(opts.body instanceof FormData)),...(opts.headers||{})}});
+async function authFetch(url, opts={}){
+  const response=await fetch(url,{...opts,credentials:'include',headers:{...authHeaders(!(opts.body instanceof FormData)),...(opts.headers||{})}});
+  if((response.status===401||response.status===403) && patientId && !url.includes('/logout')){
+    showConnectScreen();
+  }
+  return response;
 }
 
 async function sendCheckin(){
-  const payload={mood:+document.getElementById('mood').value,anxiety:+document.getElementById('anxiety').value,energy:+document.getElementById('energy').value,thoughts:document.getElementById('thoughts').value};
-  await authFetch(`${API}/patients/${patientId}/check-ins`,{method:'POST',body:JSON.stringify(payload)});
-  toastMsg('✅ Check-in enviado a tu terapeuta');
-  document.getElementById('thoughts').value='';
-  loadStats();loadMessages();
+  if(isSubmittingCheckin)return;
+  const mood=+document.getElementById('mood').value;
+  const anxiety=+document.getElementById('anxiety').value;
+  const energy=+document.getElementById('energy').value;
+  const sleepHours=document.getElementById('sleepHours')?.value;
+  const sleepQuality=document.getElementById('sleepQuality')?.value;
+  const thoughts=document.getElementById('thoughts').value.trim();
+  const emotions=[...document.querySelectorAll('#emotionOptions input:checked')].map(input=>input.value);
+  if(![mood,anxiety,energy].every(v=>Number.isInteger(v)&&v>=1&&v<=10))return toastMsg('Revisa los valores del check-in','error');
+  if(sleepHours!=='' && (Number(sleepHours)<0||Number(sleepHours)>24))return toastMsg('Las horas de sueño deben estar entre 0 y 24','error');
+  isSubmittingCheckin=true;
+  const button=document.querySelector('[data-action="send-checkin"]');
+  if(button){button.disabled=true;button.textContent='Guardando…';}
+  const payload={mood,anxiety,energy,thoughts,emotions};
+  if(sleepHours!=='')payload.sleep_hours=Number(sleepHours);
+  if(sleepQuality!=='')payload.sleep_quality=Number(sleepQuality);
+  try{
+    const r=await authFetch(`${API}/patients/${patientId}/check-ins`,{method:'POST',body:JSON.stringify(payload)});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.success===false)return toastMsg(d.error||'No se pudo enviar el check-in','error');
+    toastMsg(d.duplicate?'Este check-in ya estaba guardado':'✅ Check-in enviado a tu terapeuta');
+    document.getElementById('thoughts').value='';
+    document.querySelectorAll('#emotionOptions input').forEach(input=>{input.checked=false;});
+    if(document.getElementById('sleepHours'))document.getElementById('sleepHours').value='';
+    if(document.getElementById('sleepQuality'))document.getElementById('sleepQuality').value='';
+    updateThoughtsCount();
+    loadStats();loadProgress();updateDailySummary();
+  }catch(e){toastMsg('Error de conexión. Inténtalo de nuevo','error');}
+  finally{isSubmittingCheckin=false;if(button){button.disabled=false;button.textContent='Enviar check-in';}}
+}
+
+function updateThoughtsCount(){
+  const input=document.getElementById('thoughts');
+  const count=document.getElementById('thoughtsCount');
+  if(input&&count)count.textContent=input.value.length+'/2000';
+}
+
+function updateDailySummary(){
+  const title=document.getElementById('dailySummaryTitle');
+  const text=document.getElementById('dailySummaryText');
+  const action=document.querySelector('[data-action="summary-action"]');
+  if(!title||!text)return;
+  const pending=taskCache.filter(t=>t.status!=='completed');
+  const overdue=pending.filter(t=>t.due_date&&new Date(t.due_date)<new Date()).length;
+  if(overdue){title.textContent='Tienes algo urgente';text.textContent=overdue===1?'Hay una tarea vencida que puedes revisar.':`Tienes ${overdue} tareas vencidas que puedes revisar.`;}
+  else if(pending.length){title.textContent='Un paso cada vez';text.textContent=pending.length===1?'Tienes 1 tarea pendiente para hoy.':`Tienes ${pending.length} tareas pendientes para continuar.`;}
+  else {title.textContent='Todo al día';text.textContent='No tienes tareas pendientes. También puedes registrar cómo te sientes.';}
+  if(action)action.textContent=pending.length?'Ver tareas':'Hacer check-in';
+}
+
+function focusSummaryAction(){
+  const pending=taskCache.some(t=>t.status!=='completed');
+  document.getElementById(pending?'tasksCard':'checkinCard')?.scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 async function loadMessages(){
   try{
     const r=await authFetch(`${API}/patients/${patientId}/messages`);const d=await r.json();
     const box=document.getElementById('chatBox');
+    const unreadLabel=document.getElementById('chatUnreadLabel');
+    if(unreadLabel){unreadLabel.classList.toggle('hidden',!(d.newly_read_count>0));}
     const msgs=(d.messages||[]).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
     if(!msgs.length){renderEmptyState(box,{icon:'💬',title:'Sin mensajes aún',desc:'Escribe el primer mensaje para empezar la conversación con tu terapeuta.',cta:'Ir al chat',ctaAction:()=>document.getElementById('msgInput')?.focus()});return;}
-    box.innerHTML=msgs.map((m,i)=>`<div class="msg ${m.is_therapist?'therapist':'patient'}" style="animation-delay:${Math.min(i*.03,.3)}s"><strong>${sanitizeHTML(m.is_therapist?patientData.therapist.name:'Tú')}</strong><div class="msg-body">${sanitizeHTML(m.message)}</div><div class="msg-time">${new Date(m.created_at).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</div></div>`).join('');
+    let lastDay='';
+    box.innerHTML=msgs.map((m,i)=>{
+      const date=new Date(m.created_at);const day=date.toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'});
+      const separator=day!==lastDay?`<div class="chat-date">${sanitizeHTML(day)}</div>`:'';lastDay=day;
+      return separator+`<div class="msg ${m.is_therapist?'therapist':'patient'}" style="animation-delay:${Math.min(i*.03,.3)}s"><strong>${sanitizeHTML(m.is_therapist?patientData.therapist.name:'Tú')}</strong><div class="msg-body">${sanitizeHTML(m.message)}</div><div class="msg-time">${date.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</div></div>`;
+    }).join('');
     box.scrollTop=box.scrollHeight;
   }catch(e){}
 }
@@ -254,128 +358,80 @@ async function sendMessage(){
   }catch(e){toastMsg('Error de conexión','error');}
 }
 
+function getOfflineCompletionIds(){
+  try{
+    const values=JSON.parse(sessionStorage.getItem(OFFLINE_COMPLETIONS_KEY)||'[]');
+    return Array.isArray(values)?values.filter(value=>typeof value==='string'):[];
+  }catch(e){return [];}
+}
+
+function saveOfflineCompletion(id){
+  const ids=new Set(getOfflineCompletionIds());ids.add(String(id));
+  sessionStorage.setItem(OFFLINE_COMPLETIONS_KEY,JSON.stringify([...ids]));
+}
+
+async function syncOfflineCompletions(){
+  if(!navigator.onLine||!patientId)return;
+  const pending=getOfflineCompletionIds();
+  if(!pending.length)return;
+  const remaining=[];
+  for(const id of pending){
+    try{
+      const response=await authFetch(`${API}/patients/${patientId}/assignments/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify({completed:true})});
+      if(!response.ok&&response.status!==404)remaining.push(id);
+    }catch(e){remaining.push(id);}
+  }
+  if(remaining.length)sessionStorage.setItem(OFFLINE_COMPLETIONS_KEY,JSON.stringify(remaining));
+  else sessionStorage.removeItem(OFFLINE_COMPLETIONS_KEY);
+  loadTasks();loadStats();updateDailySummary();
+}
+
 async function loadTasks(){
   try{
-    const r=await authFetch(`${API}/patients/${patientId}/assignments`);const d=await r.json();
+    const query=taskFilter==='all'?'?status=all':'';
+    const r=await authFetch(`${API}/patients/${patientId}/assignments${query}`);const d=await r.json();
     const list=document.getElementById('tasksList');
+    taskCache=d.assignments||[];
     list.innerHTML='';
-    if(!d.assignments?.length){renderEmptyState(list,{icon:'✅',title:'Sin tareas pendientes',desc:'Tu terapeuta te asignará ejercicios y tareas para trabajar entre sesiones.'});return;}
+    const offlineIds=new Set(getOfflineCompletionIds());
+    const isDone=t=>t.status==='completed'||offlineIds.has(String(t.id));
+    const visibleTasks=taskFilter==='all'?taskCache:taskCache.filter(t=>!isDone(t));
+    const countLabel=document.getElementById('taskCountLabel');
+    const pendingCount=taskCache.filter(t=>!isDone(t)).length;
+    if(countLabel)countLabel.textContent=pendingCount?`${pendingCount} pendiente(s)`:'';
+    updateDailySummary();
+    if(!visibleTasks.length){renderEmptyState(list,{icon:taskFilter==='all'?'📋':'✅',title:taskFilter==='all'?'Aún no hay tareas':'Sin tareas pendientes',desc:taskFilter==='all'?'Aquí aparecerá tu historial de tareas.':'Tu terapeuta te asignará ejercicios y tareas para trabajar entre sesiones.'});return;}
     const now=new Date();
-    d.assignments.forEach((t, i)=>{
-      const card=document.createElement('div');
-      card.className='task-item';
-      card.dataset.taskId=t.id;
+    visibleTasks.forEach((t, i)=>{
+      const card=document.createElement('div');card.className='task-item';card.dataset.taskId=t.id;
       let dueClass='',dueLabelHtml='';
-      if(t.due_date){
-        const due=new Date(t.due_date);
-        const hoursLeft=(due-now)/(1000*60*60);
-        if(hoursLeft<0){dueClass='task-overdue';dueLabelHtml=`<div class="due-label overdue">⚠️ ¡VENCIDA! ${due.toLocaleDateString('es-ES')}</div>`;}
-        else if(hoursLeft<=24){dueClass='task-due-today';dueLabelHtml=`<div class="due-label due-today">⏰ Vence hoy: ${due.toLocaleDateString('es-ES')}</div>`;}
-        else{dueLabelHtml=`<div class="due-label due-future">📅 Vence: ${due.toLocaleDateString('es-ES')}</div>`;}
-      }
+      const isCompleted=isDone(t);const isOfflineCompleted=!isCompleted?false:offlineIds.has(String(t.id));
+      if(t.due_date){const due=new Date(t.due_date);const hoursLeft=(due-now)/(1000*60*60);if(isCompleted)dueLabelHtml=`<div class="due-label completed">${isOfflineCompleted?'⏳ Guardada sin conexión':'✅ Completada'}</div>`;else if(hoursLeft<0){dueClass='task-overdue';dueLabelHtml=`<div class="due-label overdue">⚠️ Vencida · ${due.toLocaleDateString('es-ES')}</div>`;}else if(hoursLeft<=24){dueClass='task-due-today';dueLabelHtml=`<div class="due-label due-today">⏰ Vence hoy</div>`;}else dueLabelHtml=`<div class="due-label due-future">📅 Vence: ${due.toLocaleDateString('es-ES')}</div>`;}
+      else if(isCompleted)dueLabelHtml=`<div class="due-label completed">${isOfflineCompleted?'⏳ Guardada sin conexión':'✅ Completada'}</div>`;
       card.classList.add(dueClass);
-      // Title + kind + due label are still inline-string so the static look
-      // is preserved; only the form area is substituted when exercise_kind=clinical.
-      const head=document.createElement('div');
-      head.innerHTML=`<div class="task-title">${sanitizeHTML(t.title)}</div>${dueLabelHtml}`;
-      card.appendChild(head);
-      if(t.instructions){
-        const ins=document.createElement('div');
-        ins.className='task-instructions';
-        ins.textContent=t.instructions;
-        card.appendChild(ins);
-      }
-      // kind clinical → renderizar formulario interactivo (form, autosave,
-      // submit /complete). kind classic → botón legacy "Marcar completada".
-      // Usar whitelist explícita (no heurística != 'classic') por si una BD
-      // antigua tiene exercise_kind=null: cae al camino classic sin ambigüedad.
-      const isClinical = window.ExerciseForms && typeof window.ExerciseForms.isClinicalKind === 'function'
-        ? window.ExerciseForms.isClinicalKind(t.exercise_kind)
-        : (t.exercise_kind && t.exercise_kind !== 'classic');
-      if(isClinical){
-        const formMount=document.createElement('div');
-        formMount.className='exercise-form-mount';
-        card.appendChild(formMount);
-        // Helper global expuesto por /js/exercise-forms.js
-        if(window.ExerciseForms && typeof window.ExerciseForms.mountInteractiveCard==='function'){
-          window.ExerciseForms.mountInteractiveCard(formMount, t, t.latest_session||null, {
-            patientId, authToken, apiBase: API,
-            onSaved: ()=>{ /* autosave exito: nada por hacer */ },
-            onCompleted: (st, data)=>{
-              toastMsg('✅ Ejercicio finalizado. Tu terapeuta ya puede ver tus respuestas.');
-              loadTasks(); loadStats();
-            },
-          });
-        }else{
-          formMount.textContent='(Cargando formulario clínico…)';
-        }
-      }else if(window.InteractiveWidgets && window.InteractiveWidgets.isWidgetTemplate(t.title, t.category)){
-        // Widget interactivo: mini-app guiada para este ejercicio clásico
-        var widgetMount=document.createElement('div');
-        widgetMount.className='iw-widget-mount';
-        card.appendChild(widgetMount);
-        if(typeof window.InteractiveWidgets.render==='function'){
-          window.InteractiveWidgets.render(widgetMount, t, {
-            patientId: patientId, authToken: authToken, apiBase: API,
-            onCompleted: function(data){
-              // Guardar respuestas del widget en el backend y marcar como completada
-              var widgetKind = window.InteractiveWidgets.getWidgetKind
-                ? window.InteractiveWidgets.getWidgetKind(t.title)
-                : 'widget_unknown';
-              authFetch(API + '/patients/' + patientId + '/widget-complete', {
-                method: 'POST',
-                body: JSON.stringify({
-                  assignment_id: t.id,
-                  exercise_kind: widgetKind,
-                  widget_responses: data
-                })
-              }).then(function(r){
-                if(r.ok){
-                  // Limpiar localStorage solo tras guardado exitoso
-                  if(window.InteractiveWidgets.clearWidgetState){
-                    window.InteractiveWidgets.clearWidgetState(t.id);
-                  }
-                  toastMsg('🎉 ¡Ejercicio completado y guardado!');
-                  loadTasks(); loadStats();
-                }else{
-                  // Fallback: al menos marcar como completada
-                  fallbackComplete();
-                  toastMsg('⚠️ Ejercicio completado, pero las respuestas no se guardaron en el servidor', 'error');
-                }
-              }).catch(function(){
-                fallbackComplete();
-                toastMsg('⚠️ Sin conexión. El ejercicio se completó pero no se sincronizó', 'error');
-              });
-
-              function fallbackComplete(){
-                authFetch(API + '/patients/' + patientId + '/assignments/' + t.id, {method:'PUT',body:JSON.stringify({completed:true})})
-                  .then(function(){ loadTasks(); loadStats(); })
-                  .catch(function(){});
-              }
-            }
-          });
-        }
-      }else{
-        const btn=document.createElement('button');
-        btn.className='btn btn-s btn-complete-task';
-        btn.dataset.taskId=t.id;
-        btn.textContent='✅ Marcar completada';
-        card.appendChild(btn);
-      }
-      list.appendChild(card);
-      // Staggered entrance delay for each task card
-      card.style.animationDelay = (i * 0.04) + 's';
+      const head=document.createElement('div');head.innerHTML=`<div class="task-title">${sanitizeHTML(t.title)}</div>${dueLabelHtml}`;card.appendChild(head);
+      if(t.instructions){const ins=document.createElement('div');ins.className='task-instructions';ins.textContent=t.instructions;card.appendChild(ins);}
+      const isClinical=window.ExerciseForms&&typeof window.ExerciseForms.isClinicalKind==='function'?window.ExerciseForms.isClinicalKind(t.exercise_kind):(t.exercise_kind&&t.exercise_kind!=='classic');
+      if(isCompleted){card.classList.add('task-completed');if(isOfflineCompleted)card.classList.add('task-offline');}
+      else if(isClinical){const formMount=document.createElement('div');formMount.className='exercise-form-mount';card.appendChild(formMount);if(window.ExerciseForms&&typeof window.ExerciseForms.mountInteractiveCard==='function')window.ExerciseForms.mountInteractiveCard(formMount,t,t.latest_session||null,{patientId,authToken,apiBase:API,onSaved:()=>{},onCompleted:()=>{toastMsg('✅ Ejercicio finalizado. Tu terapeuta ya puede ver tus respuestas.');loadTasks();loadStats();}});}
+      else if(window.InteractiveWidgets&&window.InteractiveWidgets.isWidgetTemplate(t.title,t.category)){const widgetMount=document.createElement('div');widgetMount.className='iw-widget-mount';card.appendChild(widgetMount);if(typeof window.InteractiveWidgets.render==='function')window.InteractiveWidgets.render(widgetMount,t,{patientId,authToken,apiBase:API,onCompleted:function(data){const widgetKind=window.InteractiveWidgets.getWidgetKind?window.InteractiveWidgets.getWidgetKind(t.title):'widget_unknown';authFetch(API+'/patients/'+patientId+'/widget-complete',{method:'POST',body:JSON.stringify({assignment_id:t.id,exercise_kind:widgetKind,widget_responses:data})}).then(function(r){if(r.ok){if(window.InteractiveWidgets.clearWidgetState)window.InteractiveWidgets.clearWidgetState(t.id);toastMsg('🎉 ¡Ejercicio completado y guardado!');loadTasks();loadStats();}else toastMsg('No se pudo guardar el ejercicio','error');}).catch(function(){toastMsg('Sin conexión: no se pudo sincronizar','error');});}});}
+      else{const btn=document.createElement('button');btn.className='btn btn-s btn-complete-task';btn.dataset.taskId=t.id;btn.textContent='✅ Marcar completada';card.appendChild(btn);}
+      list.appendChild(card);card.style.animationDelay=(i*.04)+'s';
     });
   }catch(e){}
 }
 
 async function completeTask(id){
-  // Legacy path: solo aplica a kind='classic' (los kinds clínicos usan el
-  // botón "Finalizar ejercicio" dentro del formulario interactivo, que ya
-  // publica vía /sessions/:sid/complete y marca el assignment).
-  await authFetch(`${API}/patients/${patientId}/assignments/${id}`,{method:'PUT',body:JSON.stringify({completed:true})});
-  toastMsg('🎉 ¡Tarea completada!');
-  loadTasks();loadStats();
+  // Legacy path: solo aplica a tareas classic. En offline guardamos únicamente
+  // el UUID de la asignación; nunca instrucciones, reflexiones ni respuestas.
+  if(!navigator.onLine){saveOfflineCompletion(id);toastMsg('Tarea guardada. Se sincronizará al recuperar conexión');loadTasks();updateDailySummary();return;}
+  try{
+    const response=await authFetch(`${API}/patients/${patientId}/assignments/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify({completed:true})});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok||data.success===false)return toastMsg(data.error||'No se pudo completar la tarea','error');
+    toastMsg('🎉 ¡Tarea completada!');
+    loadTasks();loadStats();loadProgress();
+  }catch(e){saveOfflineCompletion(id);toastMsg('Sin conexión: la tarea se sincronizará después');loadTasks();updateDailySummary();}
 }
 
 async function loadGoals(){
@@ -398,10 +454,18 @@ async function loadStats(){
     const streak = calcStreak(checkIns);
     animateCounter(document.getElementById('streakDays'), streak);
     if(checkIns.length){const recent=checkIns.slice(0,7);document.getElementById('avgMood').textContent=(recent.reduce((s,c)=>s+c.mood,0)/recent.length).toFixed(1);}
-    const tr=await authFetch(`${API}/patients/${patientId}/assignments`);const td=await tr.json();
-    const done = (td.assignments||[]).filter(t=>t.status==='completed').length;
+    const tr=await authFetch(`${API}/patients/${patientId}/assignments?status=all`);const td=await tr.json();
+    taskCache=td.assignments||taskCache;
+    const done = taskCache.filter(t=>t.status==='completed').length;
     animateCounter(document.getElementById('tasksDone'), done);
     updateMoodChart(checkIns);
+    const chartSummary=document.getElementById('chartSummary');
+    if(chartSummary){
+      if(!checkIns.length)chartSummary.textContent='Todavía no hay registros. Tu primer check-in aparecerá aquí.';
+      else if(checkIns.length===1)chartSummary.textContent='Ya tienes tu primer registro. Continúa a tu ritmo para identificar tendencias.';
+      else {const recent=checkIns.slice(0,7);const moodAvg=(recent.reduce((s,c)=>s+c.mood,0)/recent.length).toFixed(1);const anxietyAvg=(recent.reduce((s,c)=>s+c.anxiety,0)/recent.length).toFixed(1);chartSummary.textContent=`Últimos registros: ánimo ${moodAvg}/10 · ansiedad ${anxietyAvg}/10.`;}
+    }
+    updateDailySummary();
   }catch(e){}
 }
 
@@ -437,7 +501,49 @@ function startTechnique(type){
     },willClose:()=>toastMsg(`✅ ${t.title.split(' ').slice(0,2).join(' ')} completada`)});
 }
 
-async function disconnect(){if(confirm('¿Desconectarte de tu terapeuta?')){try{await authFetch(`${API}/patients/${patientId}/logout`,{method:'POST'});}catch(e){}disconnectSSE();localStorage.removeItem('patientConnection');location.reload();}}
+async function disconnect(){if(confirm('¿Desconectarte de tu terapeuta?')){try{await authFetch(`${API}/patients/${patientId}/logout`,{method:'POST'});}catch(e){}disconnectSSE();sessionStorage.removeItem('patientConnection');localStorage.removeItem('patientConnection');location.reload();}}
+
+// ─── RGPD: exportación y borrado de datos ──────────────────────
+async function exportMyData(){
+  try{
+    const r=await authFetch(`${API}/patients/${patientId}/export`);
+    if(!r.ok){const d=await r.json().catch(()=>({}));return toastMsg(d.error||'No se pudo exportar tus datos','error');}
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=`coter-datos-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+    toastMsg('✅ Copia de tus datos descargada');
+  }catch(e){toastMsg('Error de conexión. Inténtalo de nuevo','error');}
+}
+
+async function deleteMyData(){
+  const {value:confirmText}=await Swal.fire({
+    title:'¿Borrar todos tus datos?',
+    html:'Esta acción <strong>no se puede deshacer</strong>: se eliminarán tus check-ins, mensajes, tareas, objetivos y toda tu información, y tu terapeuta será notificado.<br><br>Escribe <strong>BORRAR</strong> para confirmar:',
+    input:'text',
+    inputPlaceholder:'BORRAR',
+    inputAttributes:{autocapitalize:'characters',maxlength:'20'},
+    showCancelButton:true,
+    confirmButtonText:'Eliminar definitivamente',
+    cancelButtonText:'Cancelar',
+    confirmButtonColor:'#ef4444',
+    allowOutsideClick:false,
+  });
+  if(!confirmText)return;
+  try{
+    const r=await authFetch(`${API}/patients/${patientId}/delete`,{method:'POST',body:JSON.stringify({confirm:confirmText})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.success)return toastMsg(d.error||'No se pudo eliminar tus datos','error');
+    disconnectSSE();
+    sessionStorage.removeItem('patientConnection');
+    localStorage.removeItem('patientConnection');
+    await Swal.fire({title:'Datos eliminados',text:'Tu información ha sido eliminada. Gracias por usar Coter.',icon:'success'});
+    location.reload();
+  }catch(e){toastMsg('Error de conexión. Inténtalo de nuevo','error');}
+}
 
 async function loadProgress(){
   try{
@@ -576,23 +682,43 @@ document.addEventListener('click', function(e){
     case 'send-message': sendMessage(); break;
     case 'mark-all-read': markAllRead(); break;
     case 'disconnect': disconnect(); break;
+    case 'export-data': exportMyData(); break;
+    case 'delete-data': deleteMyData(); break;
     case 'toggle-notifications': toggleNotifications(); break;
     case 'technique': startTechnique(btn.dataset.technique); break;
+    case 'summary-action': focusSummaryAction(); break;
+    case 'install-app': installPatientApp(); break;
+    case 'dismiss-install': document.getElementById('installBanner')?.classList.add('hidden'); break;
     default: console.warn('Unknown data-action:', action);
   }
 });
 
-// Sliders: monitorear inputs
+// Sliders, contador de reflexión y filtros: interacción delegada
 document.addEventListener('input', function(e){
   if (e.target.dataset.slider) {
     updateSlider(e.target.dataset.slider);
     e.target.setAttribute('aria-valuenow', e.target.value);
+  }
+  if(e.target.id==='thoughts')updateThoughtsCount();
+});
+
+document.addEventListener('click', function(e){
+  const filter=e.target.closest('[data-task-filter]');
+  if(filter){
+    taskFilter=filter.dataset.taskFilter;
+    document.querySelectorAll('[data-task-filter]').forEach(btn=>btn.classList.toggle('active',btn===filter));
+    loadTasks();
   }
 });
 
 // Enter en chat input
 document.addEventListener('keypress', function(e){
   if (e.key === 'Enter' && e.target.id === 'msgInput') {
-    sendMessage();
+    e.preventDefault(); sendMessage();
   }
 });
+
+window.addEventListener('online',()=>{document.body.classList.remove('is-offline');toastMsg('Conexión recuperada');syncOfflineCompletions();});
+window.addEventListener('offline',()=>{document.body.classList.add('is-offline');toastMsg('Sin conexión. Las tareas se guardarán para sincronizarse después','error');});
+if(!navigator.onLine)document.body.classList.add('is-offline');
+updateThoughtsCount();

@@ -1,0 +1,19 @@
+{
+  "name": "Coter | Espacio del paciente",
+  "short_name": "Coter",
+  "description": "Tu espacio seguro para seguimiento terapéutico",
+  "lang": "es",
+  "start_url": "/paciente.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
