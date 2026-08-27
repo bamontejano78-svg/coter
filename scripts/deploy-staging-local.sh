@@ -19,7 +19,7 @@ set -e
 # ─── Configuración ──────────────────────────────────────────
 REGISTRY="ghcr.io"
 REPO="bamontejano78-svg/coter"
-IMAGE="${REGISTRY}/${REPO}:main"
+IMAGE="${API_IMAGE:-${REGISTRY}/${REPO}:main}"
 DEPLOY_PATH="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ─── Cargar .env si existe ──────────────────────────────────
@@ -46,12 +46,12 @@ cd "$DEPLOY_PATH"
 
 echo "🚀 Starting staging services..."
 API_IMAGE="$IMAGE" \
-  docker compose -f docker-compose.staging.yml up -d --no-build --force-recreate api
+  docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --build --force-recreate
 
 # ─── Health check ───────────────────────────────────────────
 echo "⏳ Waiting for health check..."
 for i in $(seq 1 30); do
-  if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+  if curl -kfsS https://localhost/api/health > /dev/null 2>&1; then
     echo "✅ API healthy after $((i * 2))s"
     break
   fi
@@ -65,5 +65,5 @@ docker image prune -af --filter "until=24h" || true
 
 echo ""
 echo "✅ Deploy completo!"
-echo "   App: http://localhost:3000"
-echo "   Para ver logs: docker compose -f docker-compose.staging.yml logs -f api"
+echo "   App: https://localhost"
+echo "   Para ver logs: docker compose -f docker-compose.staging.yml --env-file .env.staging logs -f api"

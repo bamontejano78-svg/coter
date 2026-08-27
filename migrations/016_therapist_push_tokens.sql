@@ -6,8 +6,6 @@
 -- patient_id pasa a ser nullable. CHECK asegura que al menos
 -- uno de los dos esté presente.
 
-BEGIN;
-
 -- 1. Hacer patient_id nullable (actualmente es NOT NULL)
 ALTER TABLE push_tokens
   ALTER COLUMN patient_id DROP NOT NULL;
@@ -31,5 +29,3 @@ ALTER TABLE push_tokens
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_push_tokens_owner_token
   ON push_tokens (COALESCE(patient_id::text, therapist_id::text), token);
-
-COMMIT;

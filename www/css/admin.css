@@ -180,6 +180,24 @@
   font-size: 13px;
 }
 
+.login-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.login-back {
+  margin-top: 12px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+
+.login-back:hover { color: var(--t); }
+
 /* ─── Dashboard Screen ──────────────────────────────────── */
 .dashboard-screen.hidden { display: none; }
 
@@ -489,6 +507,98 @@
 /* ─── Activity Feed ─────────────────────────────────────── */
 .panel--activity {
   margin-bottom: 24px;
+}
+
+/* ─── Security (2FA) ────────────────────────────────────── */
+.panel--security {
+  margin-bottom: 24px;
+}
+
+.security-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+
+.security-row strong {
+  font-size: 15px;
+  color: var(--t);
+}
+
+.security-row p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 560px;
+}
+
+.security-row code {
+  background: var(--b-light);
+  border: 1px solid var(--b);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  letter-spacing: 1px;
+  color: var(--t);
+}
+
+/* ─── Audit table ───────────────────────────────────────── */
+.panel--audit {
+  margin-bottom: 24px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-table th {
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--b);
+  white-space: nowrap;
+}
+
+.admin-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--b-light);
+  color: var(--t);
+  vertical-align: top;
+}
+
+.admin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.audit-action {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--b-light);
+  color: var(--t);
+  white-space: nowrap;
+}
+
+.audit-action--export {
+  background: var(--p-soft);
+  color: var(--p-dark);
+}
+
+.audit-patient-deleted {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .activity-feed {

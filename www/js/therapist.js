@@ -15,6 +15,13 @@ let patientPoll=null;
 let sseConnection=null;
 let sseReconnectTimer=null;
 let sseBackoffMs=0;
+let idleWarningTimer=null;
+let idleLogoutTimer=null;
+let idleMonitorStarted=false;
+let privacyMode=false;
+let patientModalOpener=null;
+const IDLE_WARNING_MS=28*60*1000;
+const IDLE_LOGOUT_MS=30*60*1000;
 
 // ═══════════════════════════════════════════════════════════
 // ANIMACIONES Y MICRO-INTERACCIONES
@@ -104,7 +111,9 @@ function showSkeleton(containerId, type = 'list', count = 3) {
 
 function saveSession(t, rt, th){
   token=t;refreshToken=rt;therapist=th;
+  // Identidad persistente; tokens solo duran lo que la pestaña para reducir exposición.
   localStorage.setItem('coter_therapist',JSON.stringify({therapist:th}));
+  sessionStorage.setItem('coter_therapist_tokens',JSON.stringify({token:t,refresh_token:rt}));
 }
 
 async function doLogin(){
@@ -114,8 +123,37 @@ async function doLogin(){
   try{
     const r=await fetch(`${API}/therapists/login`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
     const d=await r.json();
-    if(d.success){saveSession(d.token,d.refresh_token,d.therapist);showApp();}
+    if(d.success){
+      if(d.requires_2fa){askTwoFactorCode(d.two_factor_token);return;}
+      saveSession(d.token,d.refresh_token,d.therapist);showApp();
+    }
     else Swal.fire('Error',d.error||'Credenciales inválidas','error');
+  }catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
+}
+
+// Segundo paso del login cuando el terapeuta tiene 2FA activada.
+// Acepta el código TOTP de 6 dígitos o un código de respaldo de 16 caracteres.
+async function askTwoFactorCode(twoFactorToken){
+  const {value:code}=await Swal.fire({
+    title:'Verificación en dos pasos',
+    text:'Introduce el código de 6 dígitos de tu app autenticadora o un código de respaldo.',
+    input:'text',
+    inputPlaceholder:'Código',
+    inputAttributes:{autocomplete:'one-time-code',autocapitalize:'characters',maxlength:'20'},
+    showCancelButton:true,
+    confirmButtonText:'Verificar',
+    cancelButtonText:'Cancelar',
+    allowOutsideClick:false,
+  });
+  if(!code)return;
+  try{
+    const r=await fetch(`${API}/therapists/verify-2fa`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({two_factor_token:twoFactorToken,code:code.trim()})});
+    const d=await r.json();
+    if(d.success){saveSession(d.token,d.refresh_token,d.therapist);showApp();}
+    else{
+      await Swal.fire('Código incorrecto',d.error||'El código no es válido. Inténtalo de nuevo.','error');
+      askTwoFactorCode(twoFactorToken);
+    }
   }catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
 }
 
@@ -138,6 +176,8 @@ function showLogin(){document.getElementById('registerScreen').classList.add('hi
 function showRegister(){document.getElementById('loginScreen').classList.add('hidden');document.getElementById('registerScreen').classList.remove('hidden');}
 
 async function logout(){
+  clearTimeout(idleWarningTimer);clearTimeout(idleLogoutTimer);
+  idleMonitorStarted=false;
   try{
     // Intentar revocar refresh tokens en el servidor
     const headers={'Content-Type':'application/json'};
@@ -146,6 +186,7 @@ async function logout(){
   }catch(e){}
   disconnectSSE();
   localStorage.removeItem('coter_therapist');
+  sessionStorage.removeItem('coter_therapist_tokens');
   location.reload();
 }
 
@@ -160,7 +201,10 @@ async function refreshAccessToken(){
   refreshToken=d.refresh_token;
   // Actualizar localStorage
   const saved=JSON.parse(localStorage.getItem('coter_therapist')||'{}');
-  if(saved.therapist)localStorage.setItem('coter_therapist',JSON.stringify({therapist:saved.therapist}));
+  if(saved.therapist){
+    localStorage.setItem('coter_therapist',JSON.stringify({therapist:saved.therapist}));
+    sessionStorage.setItem('coter_therapist_tokens',JSON.stringify({token,refresh_token:refreshToken}));
+  }
   return token;
 }
 
@@ -213,6 +257,66 @@ function showApp(){
   // como resync defensivo tras reconexiones largas o errores de carga).
   setInterval(loadDashboard,30000);
   connectSSE();
+  startInactivityMonitor();
+  restorePrivacyMode();
+}
+
+// ─── UX: navegación móvil, privacidad y sesión inactiva ─────────────
+function toggleSidebar(){
+  const sidebar=document.getElementById('sidebar');
+  const backdrop=document.querySelector('.sidebar-backdrop');
+  if(!sidebar)return;
+  const open=sidebar.classList.toggle('open');
+  if(backdrop)backdrop.classList.toggle('show',open);
+  const toggle=document.querySelector('.mobile-nav-toggle');
+  if(toggle)toggle.setAttribute('aria-expanded',open?'true':'false');
+}
+
+function closeSidebar(){
+  const sidebar=document.getElementById('sidebar');
+  const backdrop=document.querySelector('.sidebar-backdrop');
+  if(sidebar)sidebar.classList.remove('open');
+  if(backdrop)backdrop.classList.remove('show');
+  const toggle=document.querySelector('.mobile-nav-toggle');
+  if(toggle)toggle.setAttribute('aria-expanded','false');
+}
+
+function togglePrivacyMode(){
+  privacyMode=!privacyMode;
+  document.body.classList.toggle('privacy-mode',privacyMode);
+  const button=document.querySelector('.btn-privacy-toggle');
+  if(button){
+    button.setAttribute('aria-pressed',privacyMode?'true':'false');
+    button.textContent=privacyMode?'👁️ Mostrar datos':'🔒 Modo privacidad';
+  }
+  localStorage.setItem('coter_privacy_mode',privacyMode?'1':'0');
+  showToast(privacyMode?'Datos sensibles ocultos en pantalla':'Datos visibles en pantalla', 'info');
+}
+
+function restorePrivacyMode(){
+  privacyMode=localStorage.getItem('coter_privacy_mode')==='1';
+  document.body.classList.toggle('privacy-mode',privacyMode);
+  const button=document.querySelector('.btn-privacy-toggle');
+  if(button){button.setAttribute('aria-pressed',privacyMode?'true':'false');button.textContent=privacyMode?'👁️ Mostrar datos':'🔒 Modo privacidad';}
+}
+
+function resetInactivityTimer(){
+  if(!idleMonitorStarted)return;
+  clearTimeout(idleWarningTimer);clearTimeout(idleLogoutTimer);
+  idleWarningTimer=setTimeout(showIdleWarning,IDLE_WARNING_MS);
+  idleLogoutTimer=setTimeout(()=>logout(),IDLE_LOGOUT_MS);
+}
+
+function showIdleWarning(){
+  if(!token)return;
+  Swal.fire({title:'Sesión a punto de cerrarse',text:'Por privacidad, cerraremos tu sesión en 2 minutos si no detectamos actividad.',icon:'info',confirmButtonText:'Seguir trabajando',timer:120000,timerProgressBar:true,allowOutsideClick:false}).then(result=>{if(result.isConfirmed)resetInactivityTimer();});
+}
+
+function startInactivityMonitor(){
+  if(idleMonitorStarted)return;
+  idleMonitorStarted=true;
+  ['click','keydown','pointerdown','touchstart','scroll','wheel'].forEach(evt=>document.addEventListener(evt,resetInactivityTimer,{passive:true}));
+  resetInactivityTimer();
 }
 
 // ─── SSE — Real-time stream para el terapeuta ───────────────────────
@@ -367,6 +471,15 @@ function handleSSEEvent(payload) {
       // El render actual solo se dispara al pulsar el tab; lo dejamos para
       // una mejora futura (no añade valor clínico inmediato).
       break;
+    case 'patient:deleted':
+      // El paciente ejerció su derecho RGPD de borrado: eliminamos su ficha
+      // del cache, cerramos el modal si estaba abierto y refrescamos.
+      if (currentPatientId && data.patientId === currentPatientId) closePatientModal();
+      PatientsCache.invalidate();
+      loadPatients({force: true});
+      loadDashboard();
+      showToast('🗑️ Un paciente eliminó sus datos (RGPD)', 'info');
+      break;
   }
 }
 
@@ -378,6 +491,7 @@ async function loadDashboard(period){
     const r=await api(`${API}/therapists/dashboard?period=${period}`);const d=await r.json();
     if(!d.success)return;
     const db=d.dashboard;
+    renderPriorityPanel(db);
     animateCounter(document.getElementById('statPatients'), db.activePatients);
     animateCounter(document.getElementById('statCheckins'), db.todayCheckins);
     animateCounter(document.getElementById('statTasks'), db.pendingTasks);
@@ -397,6 +511,23 @@ async function loadDashboard(period){
   }catch(e){console.error(e);}
 }
 
+function renderPriorityPanel(db){
+  const container=document.getElementById('priorityContent');
+  if(!container)return;
+  const items=[];
+  const atRisk=Number(db.atRisk)||0;
+  const pendingTasks=Number(db.pendingTasks)||0;
+  if(atRisk>0)items.push({icon:'⚠️',title:atRisk+' paciente'+(atRisk===1?'':'s')+' necesita'+(atRisk===1?'':'n')+' atención',desc:'Revisa el último check-in y decide el siguiente paso.',action:'patients',label:'Ver pacientes'});
+  if(pendingTasks>0)items.push({icon:'📋',title:pendingTasks+' tarea'+(pendingTasks===1?' pendiente':'s pendientes'),desc:'Comprueba la adherencia y ajusta las asignaciones.',action:'patients',label:'Revisar tareas'});
+  const recent=db.recentActivity&&db.recentActivity[0];
+  if(recent&&recent.patient_id)items.push({icon:'💬',title:'Actividad reciente de '+(recent.patient_name||'un paciente'),desc:'Ánimo '+(recent.mood||'—')+'/10 · '+new Date(recent.created_at).toLocaleString('es-ES'),patientId:recent.patient_id,label:'Abrir ficha'});
+  if(!items.length){container.innerHTML='<div class="priority-empty"><span>✨</span><div><strong>Todo al día por ahora</strong><p>No hay alertas ni acciones urgentes en este momento.</p></div></div>';return;}
+  container.innerHTML=items.slice(0,3).map(function(item){
+    const action=item.patientId?' data-open-patient="'+sanitizeHTML(item.patientId)+'"':' data-priority-tab="'+sanitizeHTML(item.action||'patients')+'"';
+    return '<div class="priority-item"><span class="priority-icon">'+item.icon+'</span><div class="priority-item-copy privacy-sensitive"><strong>'+sanitizeHTML(item.title)+'</strong><p>'+sanitizeHTML(item.desc)+'</p></div><button class="btn btn-p btn-sm priority-action"'+action+'>'+sanitizeHTML(item.label)+'</button></div>';
+  }).join('');
+}
+
 function updateTrendChart(data, period){
   var ctx=document.getElementById('trendChart');if(trendChart)trendChart.destroy();
   // Limpiar mensaje de estado vacío previo
@@ -412,11 +543,24 @@ function updateTrendChart(data, period){
     return;
   }
   var periodLabel=period===90?'Últimos 90 días':period===30?'Últimos 30 días':'Últimos 7 días';
-  trendChart=new Chart(ctx,{type:'line',data:{labels:data.map(function(d){return d.day;}),datasets:[
-    {label:'Ánimo',data:data.map(function(d){return d.avg_mood;}),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.08)',tension:.4,fill:true,pointRadius:3},
-    {label:'Ansiedad',data:data.map(function(d){return d.avg_anxiety;}),borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.06)',tension:.4,fill:true,pointRadius:3},
-    {label:'Energía',data:data.map(function(d){return d.avg_energy;}),borderColor:'#10b981',backgroundColor:'rgba(16,185,129,.05)',tension:.4,fill:true,pointRadius:3,borderDash:[4,2]}
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:20,font:{size:12}}},title:{display:true,text:periodLabel,font:{size:11,weight:'normal'},color:'var(--muted)'}},scales:{y:{min:1,max:10,ticks:{stepSize:1},grid:{color:'rgba(148,163,184,.1)'}},x:{grid:{display:false}}}},interaction:{mode:'index',intersect:false}}});
+  trendChart=new Chart(ctx,{
+    type:'line',
+    data:{
+      labels:data.map(function(d){return d.day;}),
+      datasets:[
+        {label:'Ánimo',data:data.map(function(d){return d.avg_mood;}),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.08)',tension:.4,fill:true,pointRadius:3},
+        {label:'Ansiedad',data:data.map(function(d){return d.avg_anxiety;}),borderColor:'#ef4444',backgroundColor:'rgba(239,68,68,.06)',tension:.4,fill:true,pointRadius:3},
+        {label:'Energía',data:data.map(function(d){return d.avg_energy;}),borderColor:'#10b981',backgroundColor:'rgba(16,185,129,.05)',tension:.4,fill:true,pointRadius:3,borderDash:[4,2]}
+      ]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{position:'bottom',labels:{usePointStyle:true,padding:20,font:{size:12}}},title:{display:true,text:periodLabel,font:{size:11,weight:'normal'},color:'var(--muted)'}},
+      scales:{y:{min:1,max:10,ticks:{stepSize:1},grid:{color:'rgba(148,163,184,.1)'}},x:{grid:{display:false}}}
+    }
+  });
 }
 
 function updateAdherenceChart(adherence){
@@ -504,13 +648,23 @@ async function loadPatients({force=false}={}){
 }
 
 async function openPatient(patientId){
-  currentPatientId=patientId;document.getElementById('patientModal').classList.add('show');
+  currentPatientId=patientId;
+  patientModalOpener=document.activeElement;
+  document.querySelectorAll('.modal-tab').forEach(t=>{t.classList.remove('active');t.setAttribute('aria-selected','false');});
+  document.querySelectorAll('.modal-tab-content').forEach(c=>c.classList.remove('active'));
+  const summaryTab=document.querySelector('.modal-tab[data-ptab="ptab-presession"]');
+  const summaryPanel=document.getElementById('ptab-presession');
+  if(summaryTab){summaryTab.classList.add('active');summaryTab.setAttribute('aria-selected','true');}
+  if(summaryPanel)summaryPanel.classList.add('active');
+  document.getElementById('patientModal').classList.add('show');
   try{
     const r=await api(`${API}/therapists/patients/${patientId}`);const d=await r.json();
     if(!d.success)return Swal.fire('Error','Paciente no encontrado','error');
     patientData=d.patient;
     currentPatientDataTicketsKey = (patientData.assignments || []).map(a => a.id + ':' + a.status).join(',');
     document.getElementById('modalPatientName').textContent=patientData.name||'Paciente '+patientId.slice(0,8);
+    const firstModalControl=document.querySelector('#patientModal .modal-tab.active');
+    if(firstModalControl)firstModalControl.focus();
     renderChat();renderCheckins();renderTasks();renderGoals();renderSessions();renderNotes();loadPreSession();loadInsights();
     // Eliminamos el patientPoll (antes 4s): los mensajes llegan por SSE
     // (ver handleSSEEvent → message:new) y se refrescan automáticamente
@@ -519,7 +673,13 @@ async function openPatient(patientId){
   }catch(e){console.error(e);}
 }
 
-function closePatientModal(){document.getElementById('patientModal').classList.remove('show');currentPatientId=null;patientData=null;if(patientPoll){clearInterval(patientPoll);patientPoll=null;}}
+function closePatientModal(){
+  document.getElementById('patientModal').classList.remove('show');
+  currentPatientId=null;patientData=null;
+  if(patientPoll){clearInterval(patientPoll);patientPoll=null;}
+  if(patientModalOpener&&typeof patientModalOpener.focus==='function'){try{patientModalOpener.focus();}catch(e){}}
+  patientModalOpener=null;
+}
 
 function renderChat(){
   const box=document.getElementById('patientChat');
@@ -2121,12 +2281,140 @@ function renderBilling(container, sub) {
   if (sub.currentPeriodStart) h += '<div class="billing-info-row"><span class="billing-info-label">Período actual</span><span class="billing-info-value">' + new Date(sub.currentPeriodStart).toLocaleDateString('es-ES') + ' — ' + new Date(sub.currentPeriodEnd).toLocaleDateString('es-ES') + '</span></div>';
   if (sub.trial && sub.trial.endsAt) h += '<div class="billing-info-row"><span class="billing-info-label">Fin del trial</span><span class="billing-info-value">' + new Date(sub.trial.endsAt).toLocaleDateString('es-ES') + '</span></div>';
   h += '</div>';
-  if (status === 'trialing' || status === 'active' || status === 'past_due') {
-    h += '<div class="billing-stripe-cta"><p>La pasarela de pago con Stripe estará disponible próximamente.<br>Por ahora, disfruta del acceso completo durante el trial.</p>';
-    h += '<button class="billing-stripe-btn" disabled title="Próximamente"><svg viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px;flex-shrink:0"><path d="M13.976 8.872c-.17-1.217-.93-2.138-1.936-2.682-.562-.304-1.185-.498-1.828-.614l.735-3.118.057-.245c0-.143-.102-.266-.247-.278l-2.006-.153a.28.28 0 00-.2.07.265.265 0 00-.08.195l-.753 3.191c-.14.015-.28.032-.418.052l.917-3.906c.016-.072.024-.146.024-.22 0-.144-.102-.267-.247-.278L6.423.646a.28.28 0 00-.2.07.265.265 0 00-.08.195l-.916 3.908a25.2 25.2 0 00-.347.05L4.005 1.96c-.017-.072-.025-.146-.025-.22 0-.144-.102-.266-.248-.278L2.756 1.31a.28.28 0 00-.2.07.265.265 0 00-.08.195l.88 3.743a.04.04 0 01.002.023 9.3 9.3 0 00-1.092.418c-1.29.62-2.24 1.726-2.18 3.48.05 1.455.949 2.515 2.159 3.025 1.43.604 2.782.67 3.656.764.964.103 1.78.401 1.924 1.103.17.833-.394 1.71-1.46 2.237-1.114.55-2.542.516-3.763-.134-.306-.163-.586-.36-.834-.593a.27.27 0 00-.258-.08.266.266 0 00-.18.202l-.77 3.255a.284.284 0 00.076.276c.452.416 1.007.746 1.63.974 1.331.487 2.776.578 4.044.244 2.378-.626 3.921-2.427 3.754-4.657z"/></svg> Pagar con Stripe (próximamente)</button></div>';
+  if (status === 'trialing' || status === 'past_due') {
+    h += '<div class="billing-stripe-cta"><p>Activa tu suscripción segura con Stripe para mantener el acceso completo después del período de prueba.</p>';
+    h += '<button class="billing-stripe-btn" data-action="start-checkout"><svg viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px;flex-shrink:0"><path d="M13.976 8.872c-.17-1.217-.93-2.138-1.936-2.682-.562-.304-1.185-.498-1.828-.614l.735-3.118.057-.245c0-.143-.102-.266-.247-.278l-2.006-.153a.28.28 0 00-.2.07.265.265 0 00-.08.195l-.753 3.191c-.14.015-.28.032-.418.052l.917-3.906c.016-.072.024-.146.024-.22 0-.144-.102-.267-.247-.278L6.423.646a.28.28 0 00-.2.07.265.265 0 00-.08.195l-.916 3.908a25.2 25.2 0 00-.347.05L4.005 1.96c-.017-.072-.025-.146-.025-.22 0-.144-.102-.266-.248-.278L2.756 1.31a.28.28 0 00-.2.07.265.265 0 00-.08.195l.88 3.743a.04.04 0 01.002.023 9.3 9.3 0 00-1.092.418c-1.29.62-2.24 1.726-2.18 3.48.05 1.455.949 2.515 2.159 3.025 1.43.604 2.782.67 3.656.764.964.103 1.78.401 1.924 1.103.17.833-.394 1.71-1.46 2.237-1.114.55-2.542.516-3.763-.134-.306-.163-.586-.36-.834-.593a.27.27 0 00-.258-.08.266.266 0 00-.18.202l-.77 3.255a.284.284 0 00.076.276c.452.416 1.007.746 1.63.974 1.331.487 2.776.578 4.044.244 2.378-.626 3.921-2.427 3.754-4.657z"/></svg> Activar suscripción con Stripe</button></div>';
   }
   container.innerHTML = h;
   requestAnimationFrame(function() { const numEl = document.getElementById('billingPatientCount'); if (numEl) animateCounter(numEl, patientCount); });
+}
+
+// ═══════════════════════════════════════════════════════════
+// SEGURIDAD — Verificación en dos pasos (2FA TOTP)
+// ═══════════════════════════════════════════════════════════
+
+async function loadSecurity(){
+  const container=document.getElementById('securityContent');
+  if(!container)return;
+  container.innerHTML='<div style="text-align:center;padding:32px"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div>';
+  try{
+    const r=await api(`${API}/therapists/2fa/status`);
+    const d=await r.json();
+    if(!d||!d.success){container.innerHTML='<p class="empty-msg">No se pudo cargar el estado de seguridad.</p>';return;}
+    renderSecurity(container,!!d.enabled);
+  }catch(e){container.innerHTML='<p class="empty-msg">No se pudo cargar el estado de seguridad.</p>';}
+}
+
+function renderSecurity(container,enabled){
+  if(enabled){
+    container.innerHTML=`
+      <div style="padding:8px 4px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          <span style="font-size:28px">🔐</span>
+          <div>
+            <strong style="font-size:1.05rem">Verificación en dos pasos activa</strong>
+            <p style="margin:2px 0 0;color:#888;font-size:.85rem">Tu cuenta pide un código además de la contraseña.</p>
+          </div>
+        </div>
+        <p style="color:#444;font-size:.9rem;line-height:1.5">Cada vez que inicies sesión necesitarás un código de 6 dígitos de tu app autenticadora. Si pierdes el acceso a tu app, usa uno de tus códigos de respaldo.</p>
+        <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-d" data-action="disable-2fa">Desactivar verificación</button>
+        </div>
+      </div>`;
+  }else{
+    container.innerHTML=`
+      <div style="padding:8px 4px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+          <span style="font-size:28px">🔓</span>
+          <div>
+            <strong style="font-size:1.05rem">Verificación en dos pasos desactivada</strong>
+            <p style="margin:2px 0 0;color:#888;font-size:.85rem">Protege tu cuenta de terapeuta con un segundo factor.</p>
+          </div>
+        </div>
+        <p style="color:#444;font-size:.9rem;line-height:1.5">Al activarla, necesitarás un código de 6 dígitos generado por una app autenticadora (Google Authenticator, Authy, 1Password…) además de tu contraseña. También recibirás códigos de respaldo de emergencia.</p>
+        <div style="margin-top:20px">
+          <button class="btn btn-s" data-action="enable-2fa">Activar verificación en dos pasos</button>
+        </div>
+      </div>`;
+  }
+}
+
+async function setupTwoFactor(){
+  try{
+    const r=await api(`${API}/therapists/2fa/setup`,{method:'POST'});
+    const d=await r.json();
+    if(!d||!d.success){Swal.fire('Error',(d&&d.error)||'No se pudo iniciar la configuración','error');return;}
+    await confirmTwoFactor(d);
+  }catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
+}
+
+async function confirmTwoFactor(setup){
+  const {value:code}=await Swal.fire({
+    title:'Escanea y confirma',
+    html:`<div style="text-align:center">
+      <p style="margin-bottom:12px">Escanea este código QR con tu app autenticadora o introduce la clave manualmente:</p>
+      <img src="${setup.qr_code_data_url}" alt="Código QR para la app autenticadora" style="width:220px;height:220px;border-radius:12px;border:1px solid #e2e8f0;margin:0 auto 12px;display:block">
+      <p style="font-family:monospace;font-size:.8rem;background:#f8fafc;padding:8px 12px;border-radius:8px;word-break:break-all;margin-bottom:16px">${setup.secret}</p>
+      <p style="color:#888;font-size:.85rem;margin-bottom:16px">Introduce el código de 6 dígitos que genera tu app para confirmar.</p>
+    </div>`,
+    input:'text',
+    inputPlaceholder:'Código de 6 dígitos',
+    inputAttributes:{inputmode:'numeric',autocomplete:'one-time-code',maxlength:'6'},
+    showCancelButton:true,
+    confirmButtonText:'Confirmar',
+    cancelButtonText:'Cancelar',
+    allowOutsideClick:false,
+  });
+  if(!code)return;
+  try{
+    const r=await api(`${API}/therapists/2fa/confirm`,{method:'POST',body:JSON.stringify({code:code.trim()})});
+    const d=await r.json();
+    if(!d||!d.success){Swal.fire('Código incorrecto',(d&&d.error)||'No se pudo confirmar','error');return;}
+    await showBackupCodes(d.backup_codes||[]);
+    loadSecurity();
+  }catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
+}
+
+async function showBackupCodes(codes){
+  const list=codes.map(c=>`<code style="font-family:monospace;font-size:.95rem;letter-spacing:2px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;display:inline-block;margin:4px">${c}</code>`).join('');
+  await Swal.fire({
+    title:'Guarda tus códigos de respaldo',
+    html:`<div style="text-align:center">
+      <p style="margin-bottom:12px">Estos códigos te permiten entrar si pierdes el acceso a tu app autenticadora. <strong>Guárdalos en un lugar seguro.</strong> Solo se muestran una vez.</p>
+      <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:4px;max-width:440px;margin:0 auto 12px">${list}</div>
+      <button id="copyBackupCodes" type="button" class="btn btn-w" style="font-size:13px">📋 Copiar códigos</button>
+    </div>`,
+    showConfirmButton:true,
+    confirmButtonText:'He guardado los códigos',
+    allowOutsideClick:false,
+  });
+  const copyBtn=document.getElementById('copyBackupCodes');
+  if(copyBtn)copyBtn.onclick=()=>{
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(codes.join('\n'));}
+    copyBtn.textContent='✅ Copiados';
+  };
+}
+
+async function disableTwoFactor(){
+  const {value:code}=await Swal.fire({
+    title:'Desactivar verificación en dos pasos',
+    text:'Introduce el código actual de tu app autenticadora para confirmar.',
+    input:'text',
+    inputPlaceholder:'Código de 6 dígitos',
+    inputAttributes:{inputmode:'numeric',autocomplete:'one-time-code',maxlength:'6'},
+    showCancelButton:true,
+    confirmButtonText:'Desactivar',
+    cancelButtonText:'Cancelar',
+    allowOutsideClick:false,
+  });
+  if(!code)return;
+  try{
+    const r=await api(`${API}/therapists/2fa/disable`,{method:'POST',body:JSON.stringify({code:code.trim()})});
+    const d=await r.json();
+    if(!d||!d.success){Swal.fire('Código incorrecto',(d&&d.error)||'No se pudo desactivar','error');return;}
+    Swal.fire('Listo','Verificación en dos pasos desactivada.','success');
+    loadSecurity();
+  }catch(e){Swal.fire('Error','No se pudo conectar con el servidor','error');}
 }
 
 // ==================== EVENT DELEGATION ====================
@@ -2140,7 +2428,11 @@ document.addEventListener('click', function(e){
       case 'show-register': showRegister(); break;
       case 'show-login': showLogin(); break;
       case 'logout': logout(); break;
+      case 'toggle-privacy': togglePrivacyMode(); break;
       case 'refresh-billing': loadBilling(); break;
+      case 'enable-2fa': setupTwoFactor(); break;
+      case 'disable-2fa': disableTwoFactor(); break;
+      case 'refresh-security': loadSecurity(); break;
       case 'ack-alert': updateOneAlertStatus(btn.dataset.alertId, 'acknowledged'); break;
       case 'resolve-alert': updateOneAlertStatus(btn.dataset.alertId, 'resolved'); break;
               case 'refresh-patients': loadPatients({force:true}); break;
@@ -2196,6 +2488,7 @@ document.addEventListener('click', function(e){
     if(navItem.dataset.tab==='code')loadCode();
     if(navItem.dataset.tab==='calendar')loadCalendar();
     if(navItem.dataset.tab==='billing')loadBilling();
+    if(navItem.dataset.tab==='security')loadSecurity();
     if(navItem.dataset.tab==='library')loadTemplates();
     return;
   }
@@ -2250,6 +2543,11 @@ document.addEventListener('click', function(e){
   const chip = e.target.closest('.category-chip[data-category]');
   if (chip) { filterCategory(chip.dataset.category || null); return; }
   
+  const priorityPatient=e.target.closest('[data-open-patient]');
+  if(priorityPatient){openPatient(priorityPatient.dataset.openPatient);return;}
+  const priorityTab=e.target.closest('[data-priority-tab]');
+  if(priorityTab){const tab=document.querySelector('.nav-item[data-tab="'+priorityTab.dataset.priorityTab+'"]');if(tab)tab.click();return;}
+
   // Calendar day
   const calDay = e.target.closest('.calendar-day[data-date]');
   if (calDay) { selectCalendarDay(calDay.dataset.date); return; }
@@ -2270,5 +2568,38 @@ document.addEventListener('input', function(e){
 });
 
 // ==================== AUTO-LOGIN ====================
-const saved=localStorage.getItem('coter_therapist');
-if(saved){try{const s=JSON.parse(saved);token=s.token||null;refreshToken=s.refresh_token||null;therapist=s.therapist;if(therapist)showApp();}catch(e){localStorage.removeItem('coter_therapist');}}
+// Se difiere a DOMContentLoaded a propósito: showApp() llama a loadAlerts()
+// definida en therapist-alerts.js, que se carga DESPUÉS de therapist.js.
+// Si el auto-login se ejecutara durante la carga de therapist.js, loadAlerts
+// no existiría todavía y el TypeError (atrapado silenciosamente) abortaría
+// showApp antes de connectSSE() — el panel parecía funcionar pero nunca
+// abría el stream SSE de tiempo real.
+function tryAutoLogin(){
+  const saved=localStorage.getItem('coter_therapist');
+  if(saved){try{
+    const s=JSON.parse(saved);
+    const transient=JSON.parse(sessionStorage.getItem('coter_therapist_tokens')||'{}');
+    token=transient.token||null;refreshToken=transient.refresh_token||null;therapist=s.therapist;
+    if(therapist&&token&&refreshToken)showApp();
+    else{localStorage.removeItem('coter_therapist');sessionStorage.removeItem('coter_therapist_tokens');}
+  }catch(e){localStorage.removeItem('coter_therapist');sessionStorage.removeItem('coter_therapist_tokens');}}
+  else{sessionStorage.removeItem('coter_therapist_tokens');}
+}
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',tryAutoLogin);}
+else{tryAutoLogin();}
+
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){
+    if(document.getElementById('patientModal')?.classList.contains('show'))closePatientModal();
+    else closeSidebar();
+  }
+  if(e.key==='Tab' && document.getElementById('patientModal')?.classList.contains('show')){
+    const modal=document.querySelector('#patientModal .modal');
+    const focusable=modal?Array.from(modal.querySelectorAll('button,input,textarea,select,[tabindex]:not([tabindex="-1"])')).filter(el=>!el.disabled):[];
+    if(focusable.length){
+      const first=focusable[0],last=focusable[focusable.length-1];
+      if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+      else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+    }
+  }
+});

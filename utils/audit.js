@@ -18,6 +18,7 @@
  */
 
 const logger = require('../config/logger');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Registra un evento de auditoría
@@ -84,4 +85,35 @@ function auditChange(req, action, resource, resourceId, metadata = {}) {
   });
 }
 
-module.exports = { audit, auditAccess, auditChange };
+/**
+ * Registra un acceso a ficha clínica de forma persistente y consultable
+ * (tabla patient_access_audit, visible en el panel de administración),
+ * además del log Winston de auditAccess.
+ *
+ * Nunca lanza: un fallo de auditoría no debe romper la lectura clínica.
+ * La tabla se rellena con el id del paciente sin FK para que la traza
+ * sobreviva al borrado RGPD.
+ *
+ * @param {Object} req - Request Express (para extraer IP)
+ * @param {string} therapistId - ID del terapeuta que accede
+ * @param {string} patientId - ID del paciente consultado
+ * @param {string} action - 'view_patient' | 'view_pre_session' | 'view_notes' |
+ *   'view_sessions' | 'view_scale_history' | 'view_insights' | 'export_patient_data'
+ * @param {Object} [metadata]
+ */
+async function auditPatientAccess(req, therapistId, patientId, action, metadata = {}) {
+  const ip = req.headers['x-forwarded-for'] || req.ip || (req.connection && req.connection.remoteAddress) || null;
+  try {
+    const { getPool } = require('../database');
+    const pool = getPool();
+    await pool.query(
+      'INSERT INTO patient_access_audit (id, therapist_id, patient_id, action, ip) VALUES ($1, $2, $3, $4, $5)',
+      [uuidv4(), therapistId, patientId, action, ip]
+    );
+  } catch (err) {
+    logger.warn('No se pudo registrar auditoría de acceso', { error: err.message, therapistId, patientId, action });
+  }
+  audit({ who: therapistId, role: 'therapist', action, resource: 'patient_data', resourceId: patientId, ip, metadata });
+}
+
+module.exports = { audit, auditAccess, auditChange, auditPatientAccess };

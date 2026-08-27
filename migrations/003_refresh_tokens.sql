@@ -2,7 +2,7 @@
 -- Soporta rotación de tokens: cada refresh invalida el anterior y genera uno nuevo
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id  UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   token         TEXT UNIQUE NOT NULL,
   family        TEXT NOT NULL,       -- agrupa tokens de la misma "sesión" para detección de robo

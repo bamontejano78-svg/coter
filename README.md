@@ -7,11 +7,11 @@ Plataforma terapéutica digital que conecta terapeutas con pacientes para seguim
 - **Backend**: Node.js + Express
 - **Base de datos**: PostgreSQL
 - **Frontend**: Vanilla HTML/CSS/JS (web + móvil vía Capacitor)
-- **Infraestructura**: Docker + PM2
+- **Infraestructura**: Render (Node.js nativo), o Docker + PM2 en VPS
 
 ## 📋 Requisitos
 
-- **Node.js** >= 18
+- **Node.js** >= 20 < 21
 - **PostgreSQL** >= 14
 - **npm** >= 9
 
@@ -56,7 +56,7 @@ docker-compose logs -f api
 |----------|-------------|-----------|
 | `NODE_ENV` | Entorno: development / production / test | No (default: development) |
 | `PORT` | Puerto del servidor | No (default: 3000) |
-| `DATABASE_URL` | URL de PostgreSQL | ✅ En producción |
+| `DATABASE_URL` | URL PostgreSQL para desarrollo/test; en Docker producción Compose la construye desde `DB_PASSWORD` | No en producción Docker |
 | `JWT_SECRET` | Secreto para JWT | ✅ En producción |
 | `ENCRYPTION_KEY` | 64 caracteres hex para AES-256 | ✅ En producción |
 | `CORS_ORIGINS` | Orígenes permitidos (separados por coma) | ✅ En producción |
@@ -76,7 +76,12 @@ docker-compose logs -f api
 
 ### Terapeutas (API v1)
 - `POST /api/v1/therapists/register` — Registro
-- `POST /api/v1/therapists/login` — Login
+- `POST /api/v1/therapists/login` — Login (si el terapeuta tiene 2FA activa devuelve `requires_2fa` + `two_factor_token`)
+- `POST /api/v1/therapists/verify-2fa` — Segundo paso del login (código TOTP o código de respaldo)
+- `GET /api/v1/therapists/2fa/status` — Estado de la verificación en dos pasos 🔒
+- `POST /api/v1/therapists/2fa/setup` — Inicia configuración 2FA (devuelve secreto + QR) 🔒
+- `POST /api/v1/therapists/2fa/confirm` — Confirma 2FA con un código TOTP (devuelve códigos de respaldo) 🔒
+- `POST /api/v1/therapists/2fa/disable` — Desactiva 2FA (exige código TOTP actual) 🔒
 - `POST /api/v1/therapists/password-recovery` — Recuperar contraseña
 - `POST /api/v1/therapists/reset-password` — Resetear contraseña
 - `GET /api/v1/therapists/dashboard` — Dashboard 🔒
@@ -95,6 +100,8 @@ docker-compose logs -f api
 
 ### Pacientes
 - `POST /api/v1/patients/connect` — Conectar con código
+- `GET /api/v1/patients/:id/export` — Exportar mis datos (RGPD, JSON descargable) 🔒
+- `POST /api/v1/patients/:id/delete` — Borrar mis datos (RGPD, requiere confirmación `BORRAR`) 🔒
 - `POST /api/v1/patients/:id/check-ins` — Enviar check-in
 - `GET /api/v1/patients/:id/check-ins` — Ver check-ins
 - `GET /api/v1/patients/:id/messages` — Ver mensajes
@@ -142,6 +149,7 @@ coter/
 ├── docker-compose.yml  # Orquestación
 ├── ecosystem.config.js # Config PM2
 ├── .env.example        # Plantilla de variables
+├── render.yaml         # Blueprint Render sin Docker
 └── README.md
 ```
 
@@ -158,12 +166,58 @@ npx jest tests/encryption.test.js
 npx jest tests/api.test.js
 ```
 
-## 📱 Deploy
+### QA visual opcional (requiere `playwright-core`)
 
-### Railway / Render
-1. Conecta el repositorio
-2. Configura las variables de entorno requeridas
-3. La base de datos PostgreSQL se aprovisiona automáticamente
+Los scripts `scripts/qa-2fa.js` y `scripts/qa-gdpr.js` recorren los flujos
+2FA y RGPD en Chrome real. Son opcionales y **no** forman parte de las
+dependencias del proyecto; si quieres ejecutarlos, instala `playwright-core`
+bajo demanda (usa el Chrome ya instalado, no descarga navegadores):
+
+```bash
+npm install --no-save playwright-core
+node scripts/qa-2fa.js
+node scripts/qa-gdpr.js
+```
+
+## 📱 Deploy sin Docker — Render
+
+El archivo `render.yaml` define un Web Service de staging que ejecuta Node.js
+directamente, sin Docker, Nginx ni Certbot local. Render proporciona HTTPS y
+la variable `PORT` automáticamente.
+
+1. Crea una base de datos PostgreSQL en Render y conserva su **Internal Database URL**.
+2. Crea un Blueprint desde este repositorio y selecciona `render.yaml`.
+3. Configura `DATABASE_URL` con esa URL interna (el Blueprint no crea la BD automáticamente). En PostgreSQL gestionado, deja TLS explicito con `sslmode=verify-full` si el proveedor no lo incluye ya.
+4. Completa las variables `sync:false` en el dashboard de Render.
+5. Pon la URL pública de Render en `APP_URL` y en `CORS_ORIGINS` (por ejemplo, `https://coter-staging.onrender.com`).
+6. Configura en Stripe el webhook `https://<tu-servicio>.onrender.com/api/v1/billing/webhook`.
+7. Valida staging con:
+   - Preflight local/host: `npm run staging:preflight`
+   - Readiness operativo: `npm run staging:readiness`
+   - Smoke público: `STAGING_URL=https://<tu-servicio>.onrender.com npm run staging:smoke`
+8. Usa estos comandos si creas el servicio manualmente:
+   - Build: `npm ci --omit=dev`
+   - Start: `npm start`
+   - Health check: `/api/health`
+
+La aplicación ejecuta las migraciones al arrancar y usa un advisory lock para
+impedir migraciones concurrentes. No guardes secretos en `render.yaml` ni en Git.
+
+> El plan gratuito es solo para staging/demo: puede dormir por inactividad. Al
+> dormir, los jobs `node-cron` de recordatorios, billing y alertas no se ejecutan.
+> No uses este plan para datos clínicos reales ni para notificaciones operativas.
+> Para producción necesitas un servicio persistente, PostgreSQL con retención y
+> backups adecuados, y un scheduler/cron fiable separado o un plan que no duerma.
+
+### Estado de privacidad para producción
+
+El backend cifra datos sensibles en reposo con AES-256-GCM, incluidas
+conversaciones, check-ins, instrucciones, respuestas sensibles de ejercicios,
+notas SOAP y resúmenes de sesiones clínicas. El E2EE híbrido definido para
+datos clínicos compartidos todavía no está implementado. Antes de usar datos
+clínicos reales, las notificaciones push deben mantenerse genéricas, no debe
+persistirse PHI en almacenamiento web local y debe cerrarse la revisión legal
+RGPD/LOPDGDD.
 
 ### VPS (PM2)
 ```bash
@@ -182,6 +236,8 @@ docker-compose up -d
 
 - Contraseñas hasheadas con bcrypt (10 rondas)
 - Tokens JWT con expiración configurable
+- **Verificación en dos pasos (2FA TOTP)** para terapeutas y para el panel de administración, compatible con Google Authenticator/Authy, con códigos de respaldo de un solo uso y secreto cifrado en reposo (AES-256-GCM)
+- **Auditoría de acceso a fichas clínicas** (RGPD/LOPDGDD): cada consulta del terapeuta a una ficha, notas, sesiones o exportación queda registrada (quién, qué, cuándo, IP) y es consultable desde el panel admin; la traza sobrevive al borrado RGPD del paciente
 - Datos sensibles encriptados con AES-256-GCM
 - Rate limiting en endpoints sensibles
 - Helmet para headers de seguridad HTTP

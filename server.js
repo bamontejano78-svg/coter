@@ -17,6 +17,11 @@ const taskScheduler = require('./utils/taskScheduler');
 
 const app = express();
 
+// Render y el Nginx de producción terminan TLS delante de Express. Confiar
+// únicamente en el salto inmediato permite que req.ip y los límites de tasa
+// usen la IP real sin aceptar una cadena arbitraria de proxies.
+app.set('trust proxy', config.isSecureDeployment ? 1 : false);
+
 // ─── Seguridad ───────────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
@@ -81,6 +86,24 @@ const registerLimiter = rateLimit({
   message: { success: false, error: 'Demasiados registros. Intenta más tarde.' },
 });
 
+const adminSessionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: config.isProd ? 5 : 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Demasiados intentos, espera unos minutos' },
+});
+
+// Segundo paso del login de admin: más permisivo que el de contraseña,
+// pero aún estricto para frenar fuerza bruta sobre el código TOTP.
+const adminTwoFactorLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: config.isProd ? 10 : 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Demasiados intentos, espera unos minutos' },
+});
+
 // ─── Logging HTTP ─────────────────────────────────────────────
 if (config.isProd) {
   app.use(morgan('combined', { stream: logger.stream }));
@@ -102,6 +125,8 @@ app.use('/api/v1/therapists', therapistRoutes);
 app.use('/api/v1/patients', patientRoutes);
 app.use('/api/v1/billing', billingRoutes);
 app.use('/api/v1/pioneers', apiLimiter, pioneersRoutes);
+app.use('/api/v1/admin/session', adminSessionLimiter);
+app.use('/api/v1/admin/verify-2fa', adminTwoFactorLimiter);
 app.use('/api/v1/admin', apiLimiter, adminRoutes);
 
 // ─── SSE event stream ───────────────────────────────────────────────
@@ -184,10 +209,7 @@ initializeDatabase()
       logger.info('Coter Pro iniciado en http://' + config.HOST + ':' + config.PORT);
       logger.info('Entorno: ' + config.NODE_ENV);
       logger.info('Frontend: http://' + config.HOST + ':' + config.PORT);
-      if (!config.isProd) {
-        logger.info('Terapeuta demo: ana@coter.com / 123456');
-        logger.info('Codigo demo: TH-ABC123');
-      }
+      // No se imprimen credenciales ni códigos de acceso al arrancar.
     });
 
     // Cron de recordatorios en background. start() está deshabilitado en

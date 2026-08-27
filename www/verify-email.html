@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Confirma tu dirección de email para activar tu cuenta de Coter Pro.">
+<title>Confirma tu email — Coter Pro</title>
+<!-- No indexar esta página -->
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+  :root {
+    --bg: #f8fafc; --card: #ffffff; --text: #1e293b;
+    --muted: #64748b; --soft: #e2e8f0; --border: #cbd5e1;
+    --accent: #6366f1; --accent-hover: #4f46e5; --accent-soft: #eef2ff;
+    --green: #10b981; --green-soft: #ecfdf5;
+    --red: #ef4444; --red-soft: #fef2f2;
+    --yellow: #f59e0b; --yellow-soft: #fffbeb;
+    --radius: 16px; --shadow-lg: 0 10px 40px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --card: #1e293b; --text: #f1f5f9;
+      --muted: #94a3b8; --soft: #334155; --border: #475569;
+      --accent-soft: #1e1b4b; --green-soft: #052e16;
+      --red-soft: #450a0a; --yellow-soft: #422006;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px;
+  }
+
+  /* ─── Brand ─── */
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    text-decoration: none; color: var(--text); margin-bottom: 32px;
+  }
+  .brand-mark { color: var(--accent); display: flex; }
+  .brand strong { font-family: 'Inter Tight', sans-serif; font-size: 20px; font-weight: 700; }
+
+  /* ─── Card ─── */
+  .card {
+    background: var(--card); border: 1px solid var(--soft);
+    border-radius: var(--radius); padding: 48px 40px;
+    box-shadow: var(--shadow-lg); width: 100%; max-width: 440px;
+    text-align: center;
+  }
+
+  /* ─── Estados (ocultos por defecto, JS los muestra) ─── */
+  .state { display: none; }
+  .state.active { display: block; }
+
+  /* ─── Iconos de estado ─── */
+  .state-icon {
+    width: 64px; height: 64px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 20px; font-size: 28px;
+  }
+  .icon-loading { background: var(--accent-soft); color: var(--accent); }
+  .icon-success { background: var(--green-soft); color: var(--green); }
+  .icon-error   { background: var(--red-soft);   color: var(--red); }
+  .icon-pending { background: var(--yellow-soft); color: var(--yellow); }
+
+  /* ─── Spinner ─── */
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--accent-soft);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    margin: 0 auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── Tipografía ─── */
+  h1 {
+    font-family: 'Inter Tight', sans-serif;
+    font-size: 22px; font-weight: 800; letter-spacing: -.02em;
+    margin-bottom: 10px;
+  }
+  p { font-size: 15px; color: var(--muted); line-height: 1.6; margin-bottom: 0; }
+  p + p { margin-top: 8px; }
+
+  /* ─── Botones ─── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: 6px; width: 100%; padding: 13px 20px;
+    border-radius: 10px; font-size: 15px; font-weight: 600;
+    text-decoration: none; border: none; cursor: pointer;
+    transition: background .15s; margin-top: 24px;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-secondary {
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { background: var(--soft); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ─── Email display ─── */
+  .email-badge {
+    display: inline-block; background: var(--accent-soft); color: var(--accent);
+    border-radius: 8px; padding: 4px 12px; font-size: 14px; font-weight: 600;
+    margin: 12px 0;
+  }
+
+  /* ─── Resend form ─── */
+  .resend-form { margin-top: 16px; }
+  .resend-form input {
+    width: 100%; padding: 11px 14px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg);
+    color: var(--text); font-size: 14px; font-family: inherit;
+    margin-bottom: 8px;
+  }
+  .resend-form input:focus {
+    outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent;
+  }
+
+  /* ─── Divider ─── */
+  .divider {
+    height: 1px; background: var(--soft); margin: 24px 0;
+  }
+
+  /* ─── Footer ─── */
+  .footer {
+    margin-top: 28px; font-size: 12px; color: var(--muted); text-align: center;
+  }
+  .footer a { color: var(--muted); text-decoration: none; }
+  .footer a:hover { color: var(--text); }
+
+  @media (max-width: 480px) {
+    .card { padding: 32px 24px; }
+  }
+</style>
+</head>
+<body>
+
+<a class="brand" href="/" aria-label="Coter Pro — Inicio">
+  <span class="brand-mark" aria-hidden="true">
+    <svg width="24" height="24" viewBox="0 0 24 24" focusable="false">
+      <path d="M20 7.5A9 9 0 1 0 20 16.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+  </span>
+  <strong>Coter Pro</strong>
+</a>
+
+<div class="card" role="main">
+
+  <!-- ─── Estado: verificando (mientras la API responde) ─── -->
+  <div id="state-verifying" class="state" aria-live="polite">
+    <div class="state-icon icon-loading" aria-hidden="true">
+      <div class="spinner"></div>
+    </div>
+    <h1>Verificando tu email…</h1>
+    <p>Un momento, estamos confirmando tu dirección.</p>
+  </div>
+
+  <!-- ─── Estado: éxito ─── -->
+  <div id="state-success" class="state" aria-live="polite">
+    <div class="state-icon icon-success" aria-hidden="true">✓</div>
+    <h1>Email confirmado</h1>
+    <p>Tu cuenta está activa. Ya puedes empezar a usar Coter Pro.</p>
+    <a class="btn btn-primary" href="/terapeuta.html" id="go-dashboard">
+      Ir a mi panel
+    </a>
+  </div>
+
+  <!-- ─── Estado: token inválido / expirado ─── -->
+  <div id="state-expired" class="state" aria-live="polite">
+    <div class="state-icon icon-error" aria-hidden="true">✕</div>
+    <h1>El enlace ha expirado</h1>
+    <p>Los enlaces de verificación son válidos durante 24 horas.<br>
+       Solicita uno nuevo introduciendo tu email.</p>
+    <div class="divider" aria-hidden="true"></div>
+    <form class="resend-form" id="resend-form" novalidate>
+      <label for="resend-email" class="sr-only">Tu email</label>
+      <input
+        type="email"
+        id="resend-email"
+        name="email"
+        placeholder="tu@email.com"
+        autocomplete="email"
+        required
+        aria-label="Tu dirección de email"
+      />
+      <button type="submit" class="btn btn-primary" id="resend-btn">
+        Enviar nuevo enlace
+      </button>
+    </form>
+  </div>
+
+  <!-- ─── Estado: reenvío enviado ─── -->
+  <div id="state-resent" class="state" aria-live="polite">
+    <div class="state-icon icon-pending" aria-hidden="true">✉</div>
+    <h1>Enlace enviado</h1>
+    <p>Hemos enviado un nuevo enlace a:</p>
+    <div class="email-badge" id="resent-email-display"></div>
+    <p>Revisa tu bandeja de entrada (y la carpeta de spam).</p>
+    <div class="divider" aria-hidden="true"></div>
+    <p style="font-size:13px">¿Sigue sin llegar? Espera unos minutos y vuelve a intentarlo.</p>
+  </div>
+
+  <!-- ─── Estado: sin token (acceso directo a la página) ─── -->
+  <div id="state-pending" class="state" aria-live="polite">
+    <div class="state-icon icon-pending" aria-hidden="true">✉</div>
+    <h1>Revisa tu correo</h1>
+    <p>Te hemos enviado un enlace de confirmación. Haz clic en él para activar tu cuenta.</p>
+    <p>El enlace es válido durante <strong>24 horas</strong>.</p>
+    <div class="divider" aria-hidden="true"></div>
+    <p style="font-size:13px;margin-bottom:4px">¿No lo encuentras?</p>
+    <form class="resend-form" id="resend-form-pending" novalidate>
+      <label for="resend-email-pending" class="sr-only">Tu email</label>
+      <input
+        type="email"
+        id="resend-email-pending"
+        name="email"
+        placeholder="tu@email.com"
+        autocomplete="email"
+        aria-label="Tu dirección de email"
+      />
+      <button type="submit" class="btn btn-secondary" id="resend-btn-pending">
+        Reenviar enlace de confirmación
+      </button>
+    </form>
+  </div>
+
+  <!-- ─── Estado: error genérico ─── -->
+  <div id="state-error" class="state" aria-live="polite">
+    <div class="state-icon icon-error" aria-hidden="true">!</div>
+    <h1>Algo salió mal</h1>
+    <p id="error-message">No se pudo verificar el email. Inténtalo de nuevo.</p>
+    <a class="btn btn-secondary" href="/" style="margin-top:20px">Volver al inicio</a>
+  </div>
+
+</div>
+
+<div class="footer">
+  <a href="/">Coter Pro</a> · <a href="/pioneros.html">Programa Pioneros</a>
+</div>
+
+<!-- Estilos accesibilidad -->
+<style>
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+</style>
+
+<script>
+(function () {
+  'use strict';
+
+  const API = '/api/v1/therapists';
+
+  // ── Helpers de UI ────────────────────────────────────────────
+  function showState(id) {
+    document.querySelectorAll('.state').forEach(el => el.classList.remove('active'));
+    const el = document.getElementById(id);
+    if (el) el.classList.add('active');
+  }
+
+  function setLoading(btn, loading) {
+    btn.disabled = loading;
+    btn.textContent = loading ? 'Enviando…' : btn.dataset.label || btn.textContent;
+  }
+
+  // ── Guardar tokens de sesión ─────────────────────────────────
+  function saveSession(data) {
+    if (data.token) {
+      try { localStorage.setItem('coter_token', data.token); } catch (_) {}
+    }
+    if (data.refresh_token) {
+      try { localStorage.setItem('coter_refresh_token', data.refresh_token); } catch (_) {}
+    }
+  }
+
+  // ── Flujo principal: verificar token de la URL ───────────────
+  async function verifyToken(token) {
+    showState('state-verifying');
+    try {
+      const res = await fetch(`${API}/verify-email?token=${encodeURIComponent(token)}`);
+      const data = await res.json();
+
+      if (data.success) {
+        saveSession(data);
+        showState('state-success');
+      } else if (data.code === 'INVALID_VERIFICATION_TOKEN') {
+        showState('state-expired');
+      } else {
+        document.getElementById('error-message').textContent =
+          data.error || 'No se pudo verificar el email.';
+        showState('state-error');
+      }
+    } catch (_) {
+      document.getElementById('error-message').textContent =
+        'Error de red. Comprueba tu conexión e inténtalo de nuevo.';
+      showState('state-error');
+    }
+  }
+
+  // ── Flujo de reenvío ─────────────────────────────────────────
+  async function resendVerification(email, btn) {
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      btn.closest('form').querySelector('input').focus();
+      return;
+    }
+    btn.dataset.label = btn.textContent;
+    setLoading(btn, true);
+    try {
+      const res = await fetch(
+        `${API}/resend-verification?email=${encodeURIComponent(email)}`
+      );
+      await res.json(); // siempre success:true (respuesta opaca)
+      document.getElementById('resent-email-display').textContent = email;
+      showState('state-resent');
+    } catch (_) {
+      document.getElementById('error-message').textContent =
+        'No se pudo enviar el email. Inténtalo de nuevo.';
+      showState('state-error');
+    } finally {
+      setLoading(btn, false);
+    }
+  }
+
+  // ── Init ─────────────────────────────────────────────────────
+  function init() {
+    const params = new URLSearchParams(window.location.search);
+    const token  = params.get('token');
+
+    if (token) {
+      verifyToken(token);
+    } else {
+      // Acceso directo sin token — mostrar estado "revisa tu correo"
+      showState('state-pending');
+    }
+
+    // Formulario de reenvío (estado expired)
+    const resendForm = document.getElementById('resend-form');
+    if (resendForm) {
+      const btn = document.getElementById('resend-btn');
+      resendForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        const email = document.getElementById('resend-email').value.trim();
+        resendVerification(email, btn);
+      });
+    }
+
+    // Formulario de reenvío (estado pending)
+    const resendFormPending = document.getElementById('resend-form-pending');
+    if (resendFormPending) {
+      const btn = document.getElementById('resend-btn-pending');
+      resendFormPending.addEventListener('submit', function (e) {
+        e.preventDefault();
+        const email = document.getElementById('resend-email-pending').value.trim();
+        resendVerification(email, btn);
+      });
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+
+</body>
+</html>

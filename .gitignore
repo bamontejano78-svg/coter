@@ -55,6 +55,7 @@ certs/
 *.env
 *.env.*
 !*.env.example
+!.env.staging.example
 neon.txt
 android/app/google-services.json
 

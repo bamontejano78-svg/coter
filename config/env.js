@@ -1,10 +1,12 @@
 // En producción (Railway, etc.), las variables vienen del entorno real.
 // Solo cargar .env en desarrollo/test. En prod, process.env ya tiene los valores.
-// override:true carga todas las vars del .env, pero preservamos NODE_ENV
-// del entorno real (ej: NODE_ENV=test) para que tenga prioridad.
-if (process.env.NODE_ENV !== 'production') {
+// Las variables ya inyectadas por CI/Docker tienen prioridad sobre .env.
+// En desarrollo/test se carga el archivo local sin sobrescribir el entorno real.
+const injectedNodeEnv = process.env.NODE_ENV;
+const loadsDotenv = !['production', 'staging'].includes(injectedNodeEnv);
+if (loadsDotenv) {
   const savedNodeEnv = process.env.NODE_ENV;
-  require('dotenv').config({ path: '.env', quiet: true, override: true });
+  require('dotenv').config({ path: '.env', quiet: true });
   // Restore NODE_ENV set via command line (override:true would overwrite it from .env)
   if (savedNodeEnv) process.env.NODE_ENV = savedNodeEnv;
 }
@@ -20,6 +22,7 @@ const logger = require('./logger');
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const isProd = NODE_ENV === 'production';
 const isTest = NODE_ENV === 'test';
+const isSecureDeployment = NODE_ENV === 'production' || NODE_ENV === 'staging';
 
 // ─── Configuración del servidor ─────────────────────────────────
 const PORT = parseInt(process.env.PORT, 10) || 3000;
@@ -29,10 +32,19 @@ const HOST = process.env.HOST || '0.0.0.0';
 const CORS_ORIGINS_RAW = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || '';
 const CORS_ORIGINS = CORS_ORIGINS_RAW
   ? CORS_ORIGINS_RAW.split(',').map(o => o.trim()).filter(Boolean)
-  : (isProd ? [] : ['http://localhost:3000', 'http://localhost:8080', 'http://127.0.0.1:3000']);
+  : (isSecureDeployment ? [] : ['http://localhost:3000', 'http://localhost:8080', 'http://127.0.0.1:3000']);
 
 // ─── Base de Datos ──────────────────────────────────────────────
 const DATABASE_URL = process.env.DATABASE_URL;
+function databaseSslMode(connectionString) {
+  if (!connectionString) return null;
+  try {
+    return new URL(connectionString).searchParams.get('sslmode');
+  } catch (_err) {
+    return null;
+  }
+}
+const DATABASE_SSLMODE = databaseSslMode(DATABASE_URL);
 const DB_POOL_MIN_RAW = parseInt(process.env.DB_POOL_MIN, 10);
 const DB_POOL_MAX_RAW = parseInt(process.env.DB_POOL_MAX, 10);
 const DB_CONNECTION_TIMEOUT_MS_RAW = parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10);
@@ -44,8 +56,8 @@ const DB_CONNECTION_TIMEOUT_MS = Number.isNaN(DB_CONNECTION_TIMEOUT_MS_RAW)
 
 // ─── JWT ────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || (isProd ? '7d' : '30d');
-const REFRESH_TOKEN_DAYS = parseInt(process.env.REFRESH_TOKEN_DAYS, 10) || (isProd ? 30 : 90);
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || (isSecureDeployment ? '7d' : '30d');
+const REFRESH_TOKEN_DAYS = parseInt(process.env.REFRESH_TOKEN_DAYS, 10) || (isSecureDeployment ? 30 : 90);
 
 // ─── Encriptación ───────────────────────────────────────────────
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
@@ -62,11 +74,12 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || null;
 
 // ─── Rate Limiting ──────────────────────────────────────────────
 const RATE_LIMIT_WINDOW_MS = parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000;
-const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX, 10) || 100;
+const RATE_LIMIT_MAX = isTest ? 10000 : (parseInt(process.env.RATE_LIMIT_MAX, 10) || 100);
 
 // ─── Cron ───────────────────────────────────────────────────────
 const CRON_REMINDERS = process.env.CRON_REMINDERS || null;
 const CRON_BILLING = process.env.CRON_BILLING || null;
+const CRON_ALERTS = process.env.CRON_ALERTS || null;
 
 // ─── Stripe ──────────────────────────────────────────────────────
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || null;
@@ -79,28 +92,35 @@ const FCM_SENDER_ID = process.env.FCM_SENDER_ID || null;
 
 const warnings = [];
 const errors = [];
+const isUnsetOrPlaceholder = (value) => !value || /REEMPLAZAR|xxxxxxxx|DO_NOT_USE|admin_secreto|re_123456/i.test(value);
 
 // Validar Stripe en producción (no bloqueante — Stripe es opcional en dev)
-if (isProd && !STRIPE_SECRET_KEY) {
-  warnings.push('⚠️  STRIPE_SECRET_KEY no configurado — los pagos no funcionarán');
+if (isSecureDeployment && (isUnsetOrPlaceholder(STRIPE_SECRET_KEY) || (isProd && !/^sk_live_/.test(STRIPE_SECRET_KEY)))) {
+  errors.push('STRIPE_SECRET_KEY es requerido y debe ser una clave live en producción');
 }
-if (isProd && !STRIPE_WEBHOOK_SECRET) {
-  warnings.push('⚠️  STRIPE_WEBHOOK_SECRET no configurado — los webhooks no se verificarán');
+if (isSecureDeployment && (isUnsetOrPlaceholder(STRIPE_WEBHOOK_SECRET) || !/^whsec_/.test(STRIPE_WEBHOOK_SECRET))) {
+  errors.push('STRIPE_WEBHOOK_SECRET es requerido y debe tener formato whsec_');
 }
-if (isProd && !STRIPE_PRICE_ID) {
-  warnings.push('⚠️  STRIPE_PRICE_ID no configurado — no se podrán crear sesiones de checkout');
+if (isSecureDeployment && (isUnsetOrPlaceholder(STRIPE_PRICE_ID) || !/^price_/.test(STRIPE_PRICE_ID))) {
+  errors.push('STRIPE_PRICE_ID es requerido y debe tener formato price_');
+}
+if (isSecureDeployment && (isUnsetOrPlaceholder(process.env.ADMIN_PASSWORD) || process.env.ADMIN_PASSWORD.length < 16)) {
+  errors.push('ADMIN_PASSWORD es requerido y debe ser real en despliegues seguros');
+}
+if (isSecureDeployment && isUnsetOrPlaceholder(SMTP_PASS)) {
+  errors.push('SMTP_PASS es requerido y debe ser real para recuperación de contraseña');
 }
 
 // ─── Validación ─────────────────────────────────────────────────
-if (!JWT_SECRET && isProd) {
-  errors.push('JWT_SECRET es requerido en producción');
-} else if (!JWT_SECRET && !isProd) {
+if ((!JWT_SECRET || JWT_SECRET.length < 32 || /DO_NOT_USE|REEMPLAZAR/i.test(JWT_SECRET)) && isSecureDeployment) {
+  errors.push('JWT_SECRET es requerido y debe tener al menos 32 caracteres en despliegues seguros');
+} else if (!JWT_SECRET && !isSecureDeployment) {
   warnings.push('⚠️  JWT_SECRET no configurado — usando valor inseguro para desarrollo');
 }
 
-if (!ENCRYPTION_KEY && isProd) {
+if (!ENCRYPTION_KEY && isSecureDeployment) {
   errors.push('ENCRYPTION_KEY es requerido en producción');
-} else if (!ENCRYPTION_KEY && !isProd) {
+} else if (!ENCRYPTION_KEY && !isSecureDeployment) {
   warnings.push('⚠️  ENCRYPTION_KEY no configurada — datos sensibles NO serán encriptados');
 }
 
@@ -108,13 +128,16 @@ if (ENCRYPTION_KEY && !/^[0-9a-fA-F]{64}$/.test(ENCRYPTION_KEY)) {
   errors.push('ENCRYPTION_KEY inválida — deben ser 64 caracteres hexadecimales (32 bytes)');
 }
 
-if (!DATABASE_URL && isProd) {
+if (!DATABASE_URL && isSecureDeployment) {
   errors.push('DATABASE_URL es requerido en producción');
-} else if (!DATABASE_URL && !isProd) {
+} else if (!DATABASE_URL && !isSecureDeployment) {
   warnings.push('⚠️  DATABASE_URL no configurada — se usará SQLite local como fallback');
 }
+if (isSecureDeployment && DATABASE_SSLMODE && /^(prefer|require|verify-ca)$/i.test(DATABASE_SSLMODE)) {
+  errors.push('DATABASE_URL debe usar sslmode=verify-full en despliegues seguros');
+}
 
-if (isProd && CORS_ORIGINS.length === 0) {
+if (isSecureDeployment && CORS_ORIGINS.length === 0) {
   errors.push('CORS_ORIGINS es requerido en producción (ej: https://coter.app,https://app.coter.app)');
 }
 
@@ -122,7 +145,7 @@ if (errors.length > 0) {
   const errorMsg = '❌ Errores de configuracion:\n   • ' + errors.join('\n   • ');
   logger.error(errorMsg);
   // En produccion o test, lanzar error para detener el arranque
-  if (isProd || isTest) {
+  if (isSecureDeployment || isTest) {
     throw new Error(errorMsg);
   }
 }
@@ -136,10 +159,12 @@ module.exports = {
   NODE_ENV,
   isProd,
   isTest,
+  isSecureDeployment,
   PORT,
   HOST,
   CORS_ORIGINS,
   DATABASE_URL,
+  DATABASE_SSLMODE,
   DB_POOL_MIN,
   DB_POOL_MAX,
   DB_CONNECTION_TIMEOUT_MS,
@@ -159,6 +184,7 @@ module.exports = {
   RATE_LIMIT_MAX,
   CRON_REMINDERS,
   CRON_BILLING,
+  CRON_ALERTS,
   STRIPE_SECRET_KEY,
   STRIPE_WEBHOOK_SECRET,
   STRIPE_PRICE_ID,

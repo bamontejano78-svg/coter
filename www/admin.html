@@ -27,15 +27,21 @@
       <h1 class="login-title">Panel de Administración</h1>
       <p class="login-subtitle">Acceso restringido al equipo de Coter</p>
       <form id="loginForm" class="login-form" autocomplete="off">
-        <div class="login-field">
+        <div class="login-field" id="passwordField">
           <label for="adminPassword" class="login-label">Contraseña de administrador</label>
           <input type="password" id="adminPassword" class="login-input" placeholder="••••••••" required autofocus>
+        </div>
+        <div class="login-field hidden" id="twoFactorField">
+          <label for="twoFactorCode" class="login-label">Código de verificación</label>
+          <input type="text" id="twoFactorCode" class="login-input" placeholder="Código de 6 dígitos o respaldo" autocomplete="one-time-code" autocapitalize="characters">
+          <p class="login-hint">Introduce el código de tu app autenticadora o un código de respaldo.</p>
         </div>
         <button type="submit" id="loginBtn" class="login-btn">
           <span id="loginBtnText">Acceder al panel</span>
           <span id="loginSpinner" class="spinner hidden"></span>
         </button>
         <p id="loginError" class="login-error hidden"></p>
+        <button type="button" id="backToPasswordBtn" class="login-back hidden">← Usar contraseña</button>
       </form>
     </div>
   </div>
@@ -150,6 +156,29 @@
           <div class="activity-loading">Cargando actividad...</div>
         </div>
       </section>
+
+      <!-- Security (2FA) -->
+      <section class="panel panel--security">
+        <h2 class="panel-title">🔐 Verificación en dos pasos</h2>
+        <div id="adminSecurityContent">
+          <div class="activity-loading">Cargando estado de seguridad...</div>
+        </div>
+      </section>
+
+      <!-- Access Audit -->
+      <section class="panel panel--audit">
+        <h2 class="panel-title">🛡️ Accesos a fichas clínicas</h2>
+        <div class="table-scroll">
+          <table class="admin-table">
+            <thead>
+              <tr><th>Fecha</th><th>Terapeuta</th><th>Paciente</th><th>Acción</th><th>IP</th></tr>
+            </thead>
+            <tbody id="auditTableBody">
+              <tr><td colspan="5"><div class="activity-loading">Cargando auditoría...</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
 
     <footer class="admin-footer">
@@ -158,273 +187,6 @@
     </footer>
   </div>
 
-  <script>
-  // ════════ Admin Dashboard JS ════════
-  const API = window.location.origin + '/api/v1/admin';
-  let authToken = sessionStorage.getItem('admin_token');
-
-  // ─── DOM refs ─────────────────────────────────────────────
-  const loginScreen = document.getElementById('loginScreen');
-  const dashboardScreen = document.getElementById('dashboardScreen');
-  const loginForm = document.getElementById('loginForm');
-  const loginBtn = document.getElementById('loginBtn');
-  const loginBtnText = document.getElementById('loginBtnText');
-  const loginSpinner = document.getElementById('loginSpinner');
-  const loginError = document.getElementById('loginError');
-  const adminPassword = document.getElementById('adminPassword');
-  const lastUpdated = document.getElementById('lastUpdated');
-  const refreshBtn = document.getElementById('refreshBtn');
-  const logoutBtn = document.getElementById('logoutBtn');
-
-  // ─── Auto-login ──────────────────────────────────────────
-  if (authToken) {
-    loginScreen.classList.add('hidden');
-    dashboardScreen.classList.remove('hidden');
-    loadStats();
-    loadActivity();
-  }
-
-  // ─── Login ───────────────────────────────────────────────
-  loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const password = adminPassword.value.trim();
-    if (!password) return;
-
-    loginBtn.disabled = true;
-    loginBtnText.classList.add('hidden');
-    loginSpinner.classList.remove('hidden');
-    loginError.classList.add('hidden');
-
-    try {
-      const r = await fetch(API + '/stats', {
-        headers: {
-          'Authorization': 'Bearer ' + password,
-          'x-admin-password': password,
-        },
-      });
-      const d = await r.json();
-
-      if (r.ok && d.success) {
-        authToken = password;
-        sessionStorage.setItem('admin_token', password);
-        loginScreen.classList.add('hidden');
-        dashboardScreen.classList.remove('hidden');
-        renderStats(d.stats);
-        loadActivity();
-      } else {
-        throw new Error(d.error || 'Contraseña incorrecta');
-      }
-    } catch (err) {
-      loginError.textContent = err.message || 'Error de conexión';
-      loginError.classList.remove('hidden');
-    } finally {
-      loginBtn.disabled = false;
-      loginBtnText.classList.remove('hidden');
-      loginSpinner.classList.add('hidden');
-    }
-  });
-
-  // ─── Logout ──────────────────────────────────────────────
-  logoutBtn.addEventListener('click', () => {
-    sessionStorage.removeItem('admin_token');
-    authToken = null;
-    dashboardScreen.classList.add('hidden');
-    loginScreen.classList.remove('hidden');
-    adminPassword.value = '';
-    adminPassword.focus();
-  });
-
-  // ─── Refresh ─────────────────────────────────────────────
-  refreshBtn.addEventListener('click', () => { loadStats(); loadActivity(); });
-
-  // ─── API helpers ─────────────────────────────────────────
-  async function apiFetch(path) {
-    if (!authToken) throw new Error('No autenticado');
-    const r = await fetch(API + path, {
-      headers: {
-        'Authorization': 'Bearer ' + authToken,
-        'x-admin-password': authToken,
-      },
-    });
-    if (r.status === 401) {
-      sessionStorage.removeItem('admin_token');
-      authToken = null;
-      dashboardScreen.classList.add('hidden');
-      loginScreen.classList.remove('hidden');
-      throw new Error('Sesión expirada');
-    }
-    return r.json();
-  }
-
-  // ─── Load stats ──────────────────────────────────────────
-  async function loadStats() {
-    try {
-      const d = await apiFetch('/stats');
-      if (d.success) renderStats(d.stats);
-      document.getElementById('lastUpdated').textContent =
-        'Actualizado: ' + new Date().toLocaleTimeString('es-ES');
-    } catch (err) {
-      console.error('[admin] loadStats:', err);
-    }
-  }
-
-  function renderStats(s) {
-    // Therapists
-    document.getElementById('statTherapists').textContent = s.therapists.total;
-    document.getElementById('statTherapistsSub').textContent =
-      'Activos: ' + s.therapists.active + ' · Este mes: +' + s.therapists.thisMonth;
-
-    // Patients
-    document.getElementById('statPatients').textContent = s.patients.total;
-    document.getElementById('statPatientsSub').textContent =
-      'Conexiones activas: ' + s.patients.activeConnections + ' · Este mes: +' + s.patients.thisMonth;
-
-    // Check-ins
-    document.getElementById('statCheckIns').textContent = s.checkIns.total;
-
-    // Daily chart
-    renderDailyChart(s.checkIns.daily);
-
-    // Scales
-    document.getElementById('statScales').textContent = s.clinicalScales.completedThisWeek;
-    renderScalesBreakdown(s.clinicalScales.breakdown);
-
-    // Alerts
-    document.getElementById('statAlerts').textContent = s.alerts.total;
-    document.getElementById('statAlertsSub').textContent = 'Sin leer: ' + s.alerts.unread;
-
-    // Billing
-    const rev = new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(s.billing.revenueThisMonth);
-    document.getElementById('statRevenue').textContent = rev;
-    document.getElementById('statBillingSub').textContent =
-      'Pioneros: ' + (s.billing.pioneers || 0) +
-      ' · Trials: ' + ((s.billing.subscriptions && s.billing.subscriptions.trial) || 0);
-
-    // Stripe
-    const se = s.billing.stripe || {};
-    const totalEvents = (se.paid_invoices || 0) + (se.completed_checkouts || 0) + (se.subscriptions_created || 0) + (se.subscriptions_cancelled || 0);
-    document.getElementById('statStripeEvents').textContent = totalEvents;
-    document.getElementById('statStripeSub').textContent =
-      'Creadas: ' + (se.subscriptions_created || 0) +
-      ' · Canceladas: ' + (se.subscriptions_cancelled || 0);
-  }
-
-  // ─── Daily chart ─────────────────────────────────────────
-  function renderDailyChart(daily) {
-    const container = document.getElementById('chartBars');
-    if (!daily || daily.length === 0) {
-      container.innerHTML = '<div class="chart-empty">Sin datos de check-ins</div>';
-      return;
-    }
-
-    const maxVal = Math.max(...daily.map(d => d.count), 1);
-    const days = [];
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
-      const found = daily.find(x => x.day === key);
-      days.push({ day: key, count: found ? found.count : 0, label: d.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric' }) });
-    }
-
-    container.innerHTML = days.map(d => {
-      const h = Math.max((d.count / maxVal) * 100, d.count > 0 ? 4 : 0);
-      const cls = d.count === 0 ? 'bar-zero' : d.count >= maxVal * 0.8 ? 'bar-peak' : 'bar-normal';
-      return '<div class="chart-bar-col">' +
-        '<div class="chart-bar-value">' + (d.count || '') + '</div>' +
-        '<div class="chart-bar ' + cls + '" style="height:' + h + '%" title="' + d.day + ': ' + d.count + ' check-ins"></div>' +
-        '<div class="chart-bar-label">' + d.label.split(' ')[0] + '</div>' +
-      '</div>';
-    }).join('');
-  }
-
-  // ─── Scales breakdown ────────────────────────────────────
-  function renderScalesBreakdown(breakdown) {
-    const container = document.getElementById('scalesBreakdown');
-    if (!breakdown || breakdown.length === 0) {
-      container.innerHTML = '<div class="scales-empty">Sin escalas completadas</div>';
-      return;
-    }
-
-    const names = { phq9: 'PHQ-9', gad7: 'GAD-7', bdiii: 'BDI-II' };
-    const maxTotal = Math.max(...breakdown.map(b => b.total), 1);
-
-    container.innerHTML = breakdown.map(b => {
-      const pct = maxTotal > 0 ? Math.round((b.total / maxTotal) * 100) : 0;
-      const name = names[b.exercise_kind] || b.exercise_kind;
-      return '<div class="scale-item">' +
-        '<div class="scale-item-header">' +
-          '<span class="scale-item-name">' + name + '</span>' +
-          '<span class="scale-item-count">' + b.completed + '/' + b.total + '</span>' +
-        '</div>' +
-        '<div class="scale-item-bar-bg"><div class="scale-item-bar" style="width:' + pct + '%"></div></div>' +
-      '</div>';
-    }).join('');
-  }
-
-  // ─── Load activity ───────────────────────────────────────
-  async function loadActivity() {
-    const feed = document.getElementById('activityFeed');
-    try {
-      const d = await apiFetch('/recent-activity?limit=20');
-      if (!d.success) throw new Error(d.error);
-
-      const icons = {
-        therapist_registered: '🧑‍⚕️',
-        patient_connected: '🔗',
-        scale_completed: '📋',
-        alert_triggered: '🔔',
-        stripe_event: '💳',
-      };
-      const labels = {
-        therapist_registered: 'Terapeuta registrado',
-        patient_connected: 'Paciente conectado',
-        scale_completed: 'Escala completada',
-        alert_triggered: 'Alerta disparada',
-        stripe_event: 'Evento Stripe',
-      };
-
-      feed.innerHTML = d.activity.map(a => {
-        const timeAgo = getTimeAgo(new Date(a.created_at));
-        return '<div class="activity-item">' +
-          '<div class="activity-icon">' + (icons[a.type] || '📌') + '</div>' +
-          '<div class="activity-content">' +
-            '<div class="activity-type">' + (labels[a.type] || a.type) + '</div>' +
-            '<div class="activity-detail">' +
-              '<strong>' + escapeHtml(a.label) + '</strong>' +
-              (a.detail ? ' · ' + escapeHtml(a.detail) : '') +
-            '</div>' +
-          '</div>' +
-          '<div class="activity-time">' + timeAgo + '</div>' +
-        '</div>';
-      }).join('');
-    } catch (err) {
-      feed.innerHTML = '<div class="activity-error">Error al cargar actividad</div>';
-    }
-  }
-
-  function getTimeAgo(date) {
-    const secs = Math.floor((Date.now() - date.getTime()) / 1000);
-    if (secs < 60) return 'ahora';
-    if (secs < 3600) return Math.floor(secs / 60) + ' min';
-    if (secs < 86400) return Math.floor(secs / 3600) + ' h';
-    if (secs < 604800) return Math.floor(secs / 86400) + ' d';
-    return date.toLocaleDateString('es-ES');
-  }
-
-  function escapeHtml(s) {
-    if (!s) return '';
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  // ─── Footer env ──────────────────────────────────────────
-  (async () => {
-    try {
-      const r = await fetch('/api/health');
-      const d = await r.json();
-      document.getElementById('footerEnv').textContent = 'Env: ' + (d.environment || '?');
-    } catch (e) { document.getElementById('footerEnv').textContent = 'Env: ?'; }
-  })();
-  </script>
+  <script src="/js/admin.js"></script>
 </body>
 </html>

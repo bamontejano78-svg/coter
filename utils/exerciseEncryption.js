@@ -232,12 +232,14 @@ function encryptFieldsForKind(responses, schema, _opts) {
       encryptedBlob = encrypt(text);
     }
   } catch (e) {
-    logger.warn('exerciseEncryption: fallo encriptando sensitive blob', { error: e.message });
-    // Fallo no crítico: ponemos blob=null y dejamos responses en plano
-    // para no abortar el INSERT del exercise_session. El paciente no pierde
-    // su progreso — solo el contenido del blob sensible permanece en plano
-    // (pero igual ya era plano en `responses` antes de nuestras manos).
-    return { responses: deepClone(responses), encrypted_blob: null };
+    logger.error('exerciseEncryption: fallo encriptando sensitive blob', { error: e.message });
+    // Nunca degradar a plaintext: si no podemos cifrar PHI, abortamos la
+    // operación para que el caller haga rollback y no persista respuestas
+    // sensibles en JSONB.
+    const encryptionError = new Error('No se pudieron cifrar las respuestas sensibles');
+    encryptionError.code = 'EXERCISE_ENCRYPTION_FAILED';
+    encryptionError.cause = e;
+    throw encryptionError;
   }
 
   return { responses: cleaned, encrypted_blob: encryptedBlob };

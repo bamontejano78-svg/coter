@@ -7,10 +7,10 @@
 --   reporta el conteo de pacientes activos → Stripe genera la invoice.
 --
 -- Modelo:
---   • 14 días de trial al registrarse (sin tarjeta)
---   • €X / paciente activo / mes
---   • Pioneros (primeros 100): €3/paciente/mes con precio bloqueado 12 meses
---   • Sin plan gratuito permanente
+--   • 1 paciente activo incluido gratis de forma permanente (free tier)
+--   • €3 / paciente activo adicional / mes (a partir del segundo)
+--   • Pioneros (primeros 100): €3/paciente adicional/mes con precio bloqueado 12 meses
+--   • El free tier no requiere tarjeta ni suscripción activa
 --
 -- Tablas:
 --   subscriptions        — plan del terapeuta, link a Stripe, estado
@@ -28,7 +28,7 @@
 
 -- ─── 1) subscriptions ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS subscriptions (
-  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id        UUID NOT NULL UNIQUE REFERENCES therapists(id) ON DELETE CASCADE,
   stripe_customer_id  TEXT,
   stripe_subscription_id TEXT,
@@ -49,7 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_status   ON subscriptions(status);
 
 -- ─── 2) billing_usage — snapshot mensual reportado a Stripe ──────────────
 CREATE TABLE IF NOT EXISTS billing_usage (
-  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id        UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   period_start        DATE NOT NULL,
   period_end          DATE NOT NULL,
@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_billing_usage_therapist ON billing_usage(therapis
 
 -- ─── 3) billing_events — log inmutable de eventos ────────────────────────
 CREATE TABLE IF NOT EXISTS billing_events (
-  id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id        UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   event_type          TEXT NOT NULL
                         CHECK (event_type IN (

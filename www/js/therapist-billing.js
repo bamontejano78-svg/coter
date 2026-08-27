@@ -169,7 +169,7 @@
     html += '</div>';
 
     // ── Stripe CTA ───────────────────────────────────────
-    if (isTrial || isPastDue || isCanceled || status === 'incomplete') {
+    if (isTrial || isPastDue || status === 'incomplete') {
       html += '<div class="billing-stripe-cta">';
       var ctaText, ctaDesc;
       if (isTrial) {
@@ -179,8 +179,8 @@
         ctaText = '💳 Actualizar método de pago';
         ctaDesc = 'Tu último pago no se ha podido procesar. Actualiza tu método de pago para reactivar la suscripción.';
       } else {
-        ctaText = '💳 Reactivar suscripción';
-        ctaDesc = 'Reactiva tu suscripción para recuperar el acceso completo a la plataforma.';
+        ctaText = '💳 Completar suscripción';
+        ctaDesc = 'Completa la configuración de tu suscripción para recuperar el acceso completo a la plataforma.';
       }
       html += '<p>' + ctaDesc + '</p>';
       html += '<button class="billing-stripe-btn" data-action="start-checkout">';
@@ -263,22 +263,25 @@
 
   // ═══════════════════════════════════════════════════════════
   // MANAGE BILLING (Stripe Customer Portal)
-  // TODO: Implementar endpoint /billing/portal que use
-  // stripe.billingPortal.sessions.create() para redirigir al
-  // Customer Portal de Stripe en lugar de una checkout session.
   // ═══════════════════════════════════════════════════════════
-  function manageBilling() {
-    // Por ahora, mostrar info de que el portal estará disponible pronto.
-    // No usar /create-checkout para suscripciones activas porque crearía
-    // una nueva checkout session en lugar del portal de gestión.
-    if (typeof Swal !== 'undefined') {
-      Swal.fire({
-        title: 'Portal de facturación',
-        html: 'El portal de gestión de suscripción estará disponible próximamente.<br><br>Para gestionar tu método de pago, facturas o cancelar tu suscripción, contacta con soporte.',
-        icon: 'info',
-        confirmButtonText: 'Entendido',
-        confirmButtonColor: '#6366f1'
-      });
+  async function manageBilling() {
+    var btn = document.querySelector('[data-action="manage-billing"]');
+    var originalText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Abriendo portal...'; }
+
+    try {
+      var res = await api(API + '/billing/portal', { method: 'POST' });
+      var data = await res.json();
+      if (!res.ok || !data.success || !data.portalUrl) {
+        throw new Error(data.error || 'No se pudo abrir el portal de facturación');
+      }
+      window.location.href = data.portalUrl;
+    } catch (err) {
+      console.error('Error opening billing portal:', err);
+      if (btn) { btn.disabled = false; btn.textContent = originalText || 'Gestionar suscripción'; }
+      if (typeof Swal !== 'undefined') {
+        Swal.fire('Error', err.message || 'No se pudo abrir el portal de facturación.', 'error');
+      }
     }
   }
 

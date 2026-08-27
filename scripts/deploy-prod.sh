@@ -55,16 +55,18 @@ set -a
 source "$ENV_FILE"
 set +a
 
-if [[ "$NODE_ENV" != "production" ]]; then
+if [[ "${NODE_ENV:-}" != "production" ]]; then
   err "NODE_ENV debe ser 'production'. Actual: '$NODE_ENV'"
   exit 1
 fi
 
 # ─── Verificar variables críticas ─────────────────────────────
-CRITICAL_VARS=("JWT_SECRET" "ENCRYPTION_KEY" "DATABASE_URL" "SMTP_PASS" "STRIPE_SECRET_KEY")
+# Compose production builds DATABASE_URL from DB_PASSWORD; keeping a separate
+# DATABASE_URL here would make the preflight disagree with the actual runtime.
+CRITICAL_VARS=("JWT_SECRET" "ENCRYPTION_KEY" "DB_PASSWORD" "CORS_ORIGINS" "ADMIN_PASSWORD" "STRIPE_SECRET_KEY" "STRIPE_WEBHOOK_SECRET" "STRIPE_PRICE_ID" "API_IMAGE")
 MISSING=()
 for var in "${CRITICAL_VARS[@]}"; do
-  if [[ -z "${!var:-}" ]] || [[ "${!var}" == *"REEMPLAZAR"* ]]; then
+  if [[ -z "${!var:-}" ]] || [[ "${!var}" == *"REEMPLAZAR"* ]] || [[ "${!var}" == *"xxxxxxxx"* ]] || [[ "$var" == "API_IMAGE" && "${!var}" == *":main"* ]]; then
     MISSING+=("$var")
   fi
 done
@@ -116,10 +118,11 @@ if [[ "$FIRST_RUN" == "true" ]]; then
     ok "Certificado SSL ya existe en /etc/letsencrypt/live/coter.app"
   fi
 
-  # Configurar renovación automática
+  # Configurar renovación automática en el host. Certbot no recibe el
+  # socket Docker; el script renueva y después recarga Nginx explícitamente.
   log "Configurando renovación automática de SSL..."
-  sudo crontab -l 2>/dev/null | grep -v "certbot renew" > /tmp/crontab_tmp || true
-  echo "0 3 * * * certbot renew --quiet --deploy-hook 'docker exec coter-nginx nginx -s reload'" >> /tmp/crontab_tmp
+  sudo crontab -l 2>/dev/null | grep -v "scripts/renew-ssl.sh" > /tmp/crontab_tmp || true
+  echo "0 3 * * * cd '$PROJECT_DIR' && bash '$PROJECT_DIR/scripts/renew-ssl.sh' >> /var/log/coter-ssl-renew.log 2>&1" >> /tmp/crontab_tmp
   sudo crontab /tmp/crontab_tmp
   rm /tmp/crontab_tmp
   ok "Renovación automática configurada (cron diario a las 3am)"
@@ -127,20 +130,27 @@ fi
 
 # ─── Pull de imagen Docker ────────────────────────────────────
 log "Descargando imagen más reciente desde GHCR..."
+export API_IMAGE="${API_IMAGE:?API_IMAGE must be set to an immutable GHCR tag or digest}"
+if [[ "$API_IMAGE" == *":main"* ]]; then
+  err "API_IMAGE no puede usar :main en producción; usa un tag o digest inmutable"
+  exit 1
+fi
 sudo docker compose -f "$DOCKER_COMPOSE" pull api
-ok "Imagen descargada"
+ok "Imagen descargada: $API_IMAGE"
 
 # ─── Construir y desplegar ────────────────────────────────────
 log "Iniciando servicios..."
-sudo docker compose -f "$DOCKER_COMPOSE" up -d --build --remove-orphans
+sudo docker compose -f "$DOCKER_COMPOSE" up -d --no-build --remove-orphans
 ok "Servicios iniciados"
 
 # ─── Esperar a que la API esté saludable ──────────────────────
+# La API no publica el puerto 3000 en producción; comprobarla desde el
+# contenedor evita depender de un puerto del host.
 log "Esperando a que la API esté lista (health check)..."
 ATTEMPTS=0
 MAX_ATTEMPTS=30
 while [[ $ATTEMPTS -lt $MAX_ATTEMPTS ]]; do
-  if curl -sf http://localhost:3000/api/health > /dev/null 2>&1; then
+  if sudo docker compose -f "$DOCKER_COMPOSE" exec -T api node -e "require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1))" >/dev/null 2>&1; then
     ok "API saludable"
     break
   fi
@@ -213,6 +223,6 @@ echo ""
 
 if [[ "$FIRST_RUN" == "true" ]]; then
   echo -e "${YELLOW}⚠️  Asegúrate de configurar estos GitHub Secrets para CI/CD:${NC}"
-  echo "  SSH_HOST, SSH_USER, SSH_PRIVATE_KEY, STAGING_DEPLOY_PATH"
+  echo "  SSH_HOST, SSH_USER, SSH_PRIVATE_KEY, STAGING_DEPLOY_PATH, STAGING_URL"
   echo ""
 fi

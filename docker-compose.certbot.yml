@@ -1,0 +1,13 @@
+services:
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - coter_certbot_www:/var/www/certbot
+    entrypoint: ["certbot"]
+    command: ["renew", "--quiet"]
+
+volumes:
+  coter_certbot_www:
+    external: true
+    name: coter_certbot_www

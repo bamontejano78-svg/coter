@@ -12,8 +12,8 @@
  *   - checkAccess(): middleware helper — ¿puede este terapeuta usar la app?
  *   - logBillingEvent(): registra evento en billing_events
  *
- * Fase 2 (pendiente):
- *   - Integración con Stripe API (customers, subscriptions, usage records)
+ * Fase 2 (implementada):
+ *   - Integración con Stripe API (customers, checkout, portal, usage records)
  *   - Webhook handler para eventos de Stripe
  *   - Cron job de reporte mensual de uso
  * ═══════════════════════════════════════════════════════════════
@@ -139,6 +139,7 @@ async function isTrialActive(pool, therapistId) {
  *
  * Reglas:
  *   - Sin fila subscriptions → bloqueado (no debería pasar en prod)
+ *   - ≤ 1 paciente activo → acceso permitido siempre (free tier permanente)
  *   - status = 'trialing' → acceso permitido
  *   - status = 'active' → acceso permitido
  *   - status = 'past_due' + < 7 días → acceso permitido (gracia)
@@ -148,11 +149,11 @@ async function isTrialActive(pool, therapistId) {
  *
  * @param {Object} pool
  * @param {string} therapistId
- * @returns {Promise<{allowed: boolean, reason?: string, code?: string, subscription?: Object}>}
+ * @returns {Promise<{allowed: boolean, freeTier?: boolean, reason?: string, code?: string, subscription?: Object}>}
  */
 async function checkAccess(pool, therapistId) {
   const { rows } = await pool.query(
-    'SELECT * FROM subscriptions WHERE therapist_id = $1',
+    'SELECT s.*, t.email_verified_at FROM subscriptions s JOIN therapists t ON t.id = s.therapist_id WHERE s.therapist_id = $1',
     [therapistId]
   );
 
@@ -162,6 +163,25 @@ async function checkAccess(pool, therapistId) {
 
   const sub = rows[0];
 
+  // ── Email no verificado: bloquear independientemente del estado de la suscripción ──
+  if (!sub.email_verified_at) {
+    return {
+      allowed: false,
+      reason: 'Email no verificado. Revisa tu correo y confirma tu cuenta.',
+      code: 'EMAIL_NOT_VERIFIED',
+    };
+  }
+
+  // ── Free tier permanente: el primer paciente activo nunca requiere pago ──
+  // Se evalúa antes del estado de la suscripción para que cualquier terapeuta
+  // con ≤1 paciente activo pueda usar la plataforma aunque su trial haya
+  // expirado o su suscripción esté cancelada.
+  const activePatients = await countActivePatients(pool, therapistId);
+  if (activePatients <= 1) {
+    return { allowed: true, freeTier: true, subscription: sub };
+  }
+
+  // ── Para > 1 paciente activo se requiere suscripción válida ──
   if (sub.status === 'trialing' || sub.status === 'active' || sub.status === 'incomplete') {
     return { allowed: true, subscription: sub };
   }
@@ -290,29 +310,30 @@ async function findTherapistByStripeCustomer(pool, stripeCustomerId) {
  * @returns {Promise<boolean>} true si el evento es nuevo, false si ya fue procesado
  */
 async function claimStripeEvent(pool, stripeEventId, eventType) {
-  if (!stripeEventId) return true; // sin ID no podemos deduplicar, procesar igual
+  if (!stripeEventId) {
+    throw new Error('Stripe event id es obligatorio para procesar webhooks');
+  }
 
   try {
-    await pool.query(
-      'INSERT INTO stripe_webhook_events (stripe_event_id, event_type) VALUES ($1, $2)',
+    const { rows } = await pool.query(
+      `INSERT INTO stripe_webhook_events
+         (stripe_event_id, event_type, status, claimed_at)
+       VALUES ($1, $2, 'processing', NOW())
+       ON CONFLICT (stripe_event_id) DO UPDATE
+         SET status = 'processing', claimed_at = NOW(), event_type = EXCLUDED.event_type
+         WHERE stripe_webhook_events.status = 'processing'
+           AND stripe_webhook_events.claimed_at < NOW() - INTERVAL '5 minutes'
+       RETURNING stripe_event_id`,
       [stripeEventId, eventType]
     );
-    return true; // evento nuevo, podemos procesarlo
+    if (rows.length > 0) return true;
+    logger.info('Webhook de Stripe ya procesado o en curso', { stripeEventId, eventType });
+    return false;
   } catch (err) {
-    // 23505 = unique_violation: el evento ya fue procesado → skip seguro
-    if (err.code === '23505') {
-      logger.info('Webhook de Stripe ya procesado (idempotencia)', { stripeEventId, eventType });
-      return false;
-    }
-    // 42P01 = undefined_table: la migración 009 no se ha aplicado aún.
-    // No queremos rechazar webhooks legítimos por una migración pendiente.
-    if (err.code === '42P01') {
-      logger.warn('Tabla stripe_webhook_events no existe — migración 009 pendiente', { stripeEventId });
-      return true;
-    }
-    // Otro error: fail-open para no perder webhooks legítimos
+    // La tabla/esquema es obligatoria en producción. Un error de BD debe
+    // provocar un 5xx para que Stripe reintente, nunca procesar sin idempotencia.
     logger.error('Error en claimStripeEvent', { error: err.message, code: err.code, stripeEventId, eventType });
-    return true;
+    throw err;
   }
 }
 

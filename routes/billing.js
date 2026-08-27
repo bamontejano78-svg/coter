@@ -11,7 +11,7 @@
  */
 
 const express = require('express');
-const { getPool } = require('../database');
+const { getPool, withTransaction } = require('../database');
 const { authenticateToken } = require('../middleware/auth');
 const {
   isTrialActive,
@@ -21,7 +21,7 @@ const {
   logBillingEvent,
   claimStripeEvent,
 } = require('../utils/billing');
-const { createCheckoutSession, verifyWebhook } = require('../utils/stripe');
+const { createCheckoutSession, createBillingPortalSession, verifyWebhook } = require('../utils/stripe');
 const logger = require('../config/logger');
 const config = require('../config/env');
 
@@ -49,6 +49,8 @@ router.get('/status', authenticateToken, async (req, res) => {
 
     const sub = rows[0];
     const patientCount = await countActivePatients(pool, therapistId);
+    // El primer paciente activo es siempre gratuito; el cargo aplica a partir del segundo.
+    const billablePatients = Math.max(0, patientCount - 1);
 
     const trial = sub.status === 'trialing'
       ? await isTrialActive(pool, therapistId)
@@ -60,7 +62,8 @@ router.get('/status', authenticateToken, async (req, res) => {
         status: sub.status,
         pricePerPatientCents: sub.price_per_patient_cents,
         patientCount,
-        estimatedMonthlyCostCents: patientCount * sub.price_per_patient_cents,
+        billablePatients,
+        estimatedMonthlyCostCents: billablePatients * sub.price_per_patient_cents,
         isPioneer: sub.is_pioneer === true,
         priceLockedUntil: sub.price_locked_until || null,
         currentPeriodStart: sub.current_period_start,
@@ -97,12 +100,17 @@ router.get('/usage', authenticateToken, async (req, res) => {
       ? subRows[0].price_per_patient_cents
       : 300;
 
+    // El primer paciente activo es siempre gratuito.
+    const billablePatients = Math.max(0, patientCount - 1);
+
     res.json({
       success: true,
       usage: {
         activePatients: patientCount,
+        freePatients: Math.min(patientCount, 1),
+        billablePatients,
         pricePerPatientCents: priceCents,
-        estimatedMonthlyCostCents: patientCount * priceCents,
+        estimatedMonthlyCostCents: billablePatients * priceCents,
         period: {
           start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString(),
           end: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59, 999).toISOString(),
@@ -122,8 +130,22 @@ router.post('/create-checkout', authenticateToken, async (req, res) => {
   try {
     const pool = getPool();
     const therapistId = req.user.id;
-    const successUrl = req.body.successUrl || `${config.APP_URL}/terapeuta.html?checkout=success`;
-    const cancelUrl = req.body.cancelUrl || `${config.APP_URL}/terapeuta.html?checkout=cancel`;
+    const { rows: subscriptionRows } = await pool.query(
+      'SELECT status FROM subscriptions WHERE therapist_id = $1',
+      [therapistId]
+    );
+    const subscriptionStatus = subscriptionRows[0]?.status;
+    if (!['trialing', 'incomplete', 'past_due'].includes(subscriptionStatus)) {
+      return res.status(409).json({
+        success: false,
+        error: 'La suscripción actual no requiere un nuevo checkout',
+        code: 'CHECKOUT_NOT_ALLOWED',
+      });
+    }
+    // Las URLs de retorno son controladas por el servidor; no aceptar URLs
+    // arbitrarias del cliente para evitar redirecciones abiertas.
+    const successUrl = `${config.APP_URL}/terapeuta.html?checkout=success`;
+    const cancelUrl = `${config.APP_URL}/terapeuta.html?checkout=cancel`;
 
     const session = await createCheckoutSession(pool, therapistId, successUrl, cancelUrl);
 
@@ -148,6 +170,33 @@ router.post('/create-checkout', authenticateToken, async (req, res) => {
   } catch (err) {
     logger.error('Error en POST /billing/create-checkout', { error: err.message });
     res.status(500).json({ success: false, error: 'Error al crear sesión de pago' });
+  }
+});
+
+// ─── POST /portal ────────────────────────────────────────────
+// Abre el Customer Portal de Stripe para el terapeuta autenticado.
+router.post('/portal', authenticateToken, async (req, res) => {
+  try {
+    const pool = getPool();
+    const returnUrl = `${config.APP_URL}/terapeuta.html`;
+    const session = await createBillingPortalSession(pool, req.user.id, returnUrl);
+
+    if (!session) {
+      return res.status(409).json({
+        success: false,
+        error: 'No hay una suscripción de Stripe disponible para gestionar',
+        code: 'PORTAL_UNAVAILABLE',
+      });
+    }
+
+    await logBillingEvent(pool, req.user.id, 'billing_portal_session_created', null, {
+      sessionId: session.sessionId,
+    });
+
+    res.json({ success: true, portalUrl: session.url, sessionId: session.sessionId });
+  } catch (err) {
+    logger.error('Error en POST /billing/portal', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error al abrir el portal de facturación' });
   }
 });
 
@@ -177,7 +226,13 @@ router.post('/webhook', async (req, res) => {
   logger.info('Webhook de Stripe recibido', { type: event.type, id: event.id });
 
   // ── Idempotencia: evitar procesar el mismo evento dos veces ──
-  const isNew = await claimStripeEvent(pool, event.id, event.type);
+  let isNew;
+  try {
+    isNew = await claimStripeEvent(pool, event.id, event.type);
+  } catch (err) {
+    logger.error('No se pudo reclamar webhook de Stripe', { error: err.message, eventId: event.id });
+    return res.status(503).json({ error: 'Webhook temporalmente no disponible' });
+  }
   if (!isNew) {
     // Evento ya procesado anteriormente — responder 200 para que
     // Stripe no reintente (ya está confirmado)
@@ -185,7 +240,8 @@ router.post('/webhook', async (req, res) => {
   }
 
   try {
-    switch (event.type) {
+    await withTransaction(async (client) => {
+      switch (event.type) {
       // ── Sesión de checkout completada ──────────────────────
       case 'checkout.session.completed': {
         const session = event.data.object;
@@ -197,11 +253,11 @@ router.post('/webhook', async (req, res) => {
         // Resolver therapist_id si no viene en metadata
         let resolvedId = therapistId;
         if (!resolvedId && customerId) {
-          resolvedId = await findTherapistByStripeCustomer(pool, customerId);
+          resolvedId = await findTherapistByStripeCustomer(client, customerId);
         }
 
         if (resolvedId) {
-          await transitionSubscription(pool, resolvedId, 'active', {
+          await transitionSubscription(client, resolvedId, 'active', {
             stripeSubscriptionId: subscriptionId,
           });
           logger.info('Suscripción activada vía checkout.session.completed', {
@@ -223,9 +279,9 @@ router.post('/webhook', async (req, res) => {
         const customerId = invoice.customer;
         const subscriptionId = invoice.subscription;
 
-        const therapistId = await findTherapistByStripeCustomer(pool, customerId);
+        const therapistId = await findTherapistByStripeCustomer(client, customerId);
         if (therapistId) {
-          await transitionSubscription(pool, therapistId, 'active', {
+          await transitionSubscription(client, therapistId, 'active', {
             stripeSubscriptionId: subscriptionId,
             currentPeriodStart: invoice.period_start
               ? new Date(invoice.period_start * 1000).toISOString()
@@ -248,9 +304,9 @@ router.post('/webhook', async (req, res) => {
         const customerId = invoice.customer;
         const subscriptionId = invoice.subscription;
 
-        const therapistId = await findTherapistByStripeCustomer(pool, customerId);
+        const therapistId = await findTherapistByStripeCustomer(client, customerId);
         if (therapistId) {
-          await transitionSubscription(pool, therapistId, 'past_due', {
+          await transitionSubscription(client, therapistId, 'past_due', {
             stripeSubscriptionId: subscriptionId,
           });
           logger.info('Factura impagada — suscripción en past_due', {
@@ -266,9 +322,9 @@ router.post('/webhook', async (req, res) => {
         const subscription = event.data.object;
         const customerId = subscription.customer;
 
-        const therapistId = await findTherapistByStripeCustomer(pool, customerId);
+        const therapistId = await findTherapistByStripeCustomer(client, customerId);
         if (therapistId) {
-          await transitionSubscription(pool, therapistId, 'canceled');
+          await transitionSubscription(client, therapistId, 'canceled');
           logger.info('Suscripción cancelada', {
             therapistId,
             stripeSubscriptionId: subscription.id,
@@ -278,20 +334,26 @@ router.post('/webhook', async (req, res) => {
       }
 
       // ── Eventos no manejados ───────────────────────────────
-      default: {
-        logger.info('Evento de Stripe no manejado', { type: event.type });
+        default: {
+          logger.info('Evento de Stripe no manejado', { type: event.type });
+        }
       }
-    }
 
+      await client.query(
+        "UPDATE stripe_webhook_events SET status = 'processed', processed_at = NOW() WHERE stripe_event_id = $1",
+        [event.id]
+      );
+    });
     res.json({ received: true });
   } catch (err) {
     logger.error('Error procesando webhook de Stripe', {
       error: err.message,
       eventType: event.type,
+      eventId: event.id,
     });
-    // Siempre respondemos 200 a Stripe para evitar reintentos
-    // (Stripe reintentará si devolvemos códigos 4xx/5xx)
-    res.json({ received: true, error: 'processed with errors' });
+    // Dejar el registro en processing: tras cinco minutos otro intento puede
+    // reclamarlo; así no se pierde el evento si el proceso cayó a mitad.
+    return res.status(500).json({ error: 'Error procesando webhook' });
   }
 });
 

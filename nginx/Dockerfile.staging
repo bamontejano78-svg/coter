@@ -1,0 +1,18 @@
+FROM nginx:1.27-alpine
+
+RUN apk add --no-cache openssl \
+  && mkdir -p /etc/nginx/certs /var/www/certbot \
+  && openssl req -x509 -nodes -days 30 -newkey rsa:2048 \
+       -keyout /etc/nginx/certs/staging.key \
+       -out /etc/nginx/certs/staging.crt \
+       -subj "/CN=localhost" \
+  && chmod 600 /etc/nginx/certs/staging.key
+
+COPY nginx.staging.conf /etc/nginx/conf.d/default.conf
+COPY limits.conf /etc/nginx/conf.d/00-limits.conf
+
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+  CMD nginx -t || exit 1
+
+EXPOSE 80 443
+CMD ["nginx", "-g", "daemon off;"]

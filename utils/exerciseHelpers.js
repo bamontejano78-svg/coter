@@ -25,6 +25,7 @@
 
 const { getSchema } = require('./exerciseSchemas');
 const { decryptFieldsForKind } = require('./exerciseEncryption');
+const { decrypt } = require('./encryption');
 
 // ─── schemaForAssignment ─────────────────────────────────────
 // Resuelve el schema efectivo para una fila de assignments. Por qué existe:
@@ -53,8 +54,20 @@ function schemaForAssignment(asg) {
 function decodeSessionResponses(sessRow, assignment) {
   if (!sessRow || !assignment) return null;
   const schema = schemaForAssignment(assignment);
-  if (!schema) return sessRow.responses || {};
-  return decryptFieldsForKind(sessRow.responses || {}, sessRow.encrypted_blob, schema);
+  if (schema) return decryptFieldsForKind(sessRow.responses || {}, sessRow.encrypted_blob, schema);
+
+  // Los widgets legacy no tienen schema declarativo en assignments. Su
+  // payload completo se cifra como blob para no dejar texto clínico en JSONB;
+  // descifrarlo solo al construir la respuesta autorizada del terapeuta.
+  if (typeof sessRow.exercise_kind === 'string' && sessRow.exercise_kind.startsWith('widget_') && sessRow.encrypted_blob) {
+    try {
+      const decoded = JSON.parse(decrypt(sessRow.encrypted_blob));
+      return decoded && typeof decoded === 'object' && !Array.isArray(decoded) ? decoded : {};
+    } catch (err) {
+      return {};
+    }
+  }
+  return sessRow.responses || {};
 }
 
 // ─── fetchLatestSessionsForAssignments ───────────────────────

@@ -1,85 +1,95 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════
-# Coter Pro — Database Backup Script
-# 
+# Coter Pro — Backup de PostgreSQL
+#
 # Uso:
-#   bash scripts/backup.sh                    # Backup local
-#   bash scripts/backup.sh s3                 # Backup + upload a S3
-# 
-# Configurar en crontab:
-#   0 2 * * * cd /path/to/coter && bash scripts/backup.sh s3
+#   bash scripts/backup.sh
+#   bash scripts/backup.sh s3
+#
+# En producción la BD vive en el contenedor postgres. También se puede
+# usar DATABASE_URL para desarrollo o proveedores externos.
+# Para cifrar backups: BACKUP_ENCRYPTION_KEY_FILE=/ruta/clave.gpg
 # ═══════════════════════════════════════════════════════════════
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+COMPOSE_FILE="${COMPOSE_FILE:-$PROJECT_DIR/docker-compose.yml}"
+ENV_FILE="${ENV_FILE:-$PROJECT_DIR/.env}"
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_DIR/backups}"
-TIMESTAMP=$(date -u +"%Y%m%d_%H%M%S")
-BACKUP_FILE="$BACKUP_DIR/coter_backup_$TIMESTAMP.sql.gz"
+TIMESTAMP="$(date -u +"%Y%m%d_%H%M%S")"
+RAW_FILE="$BACKUP_DIR/coter_backup_$TIMESTAMP.sql.gz"
+BACKUP_FILE="$RAW_FILE"
+ERR_FILE="$(mktemp)"
+trap 'rm -f "$ERR_FILE"' EXIT
 
-# ─── Configuración ─────────────────────────────────────────
-# DATABASE_URL puede venir de .env o variable de entorno
-if [ -f "$PROJECT_DIR/.env" ]; then
+if [[ -f "$ENV_FILE" ]]; then
   set -a
-  source "$PROJECT_DIR/.env" 2>/dev/null
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
   set +a
 fi
 
-if [ -z "${DATABASE_URL:-}" ]; then
-  echo "❌ ERROR: DATABASE_URL no está configurada."
-  echo "   Define DATABASE_URL en .env o como variable de entorno."
-  exit 1
-fi
-
-# ─── Crear directorio de backups ───────────────────────────
 mkdir -p "$BACKUP_DIR"
 
-echo ""
-echo "╔══════════════════════════════════════════════╗"
-echo "║   🧠 Coter Pro — Database Backup            ║"
-echo "╚══════════════════════════════════════════════╝"
-echo ""
-echo "   📅 Timestamp:  $TIMESTAMP"
-echo "   📁 Backup:     $BACKUP_FILE"
-echo ""
+if [[ -n "${BACKUP_ENCRYPTION_KEY_FILE:-}" ]]; then
+  if [[ ! -r "$BACKUP_ENCRYPTION_KEY_FILE" ]]; then
+    echo "ERROR: BACKUP_ENCRYPTION_KEY_FILE no es legible" >&2
+    exit 1
+  fi
+  BACKUP_FILE="$RAW_FILE.gpg"
+fi
 
-# ─── Ejecutar pg_dump ──────────────────────────────────────
-echo "⏳ Realizando backup..."
-if pg_dump "$DATABASE_URL" --no-owner --no-acl 2>/tmp/coter_backup_err.log | gzip > "$BACKUP_FILE"; then
-  SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
-  echo "   ✅ Backup completado: $BACKUP_FILE ($SIZE)"
-else
-  echo "   ❌ Error en pg_dump:"
-  cat /tmp/coter_backup_err.log
-  rm -f /tmp/coter_backup_err.log
+if [[ "${NODE_ENV:-development}" == "production" && -z "${BACKUP_ENCRYPTION_KEY_FILE:-}" ]]; then
+  echo "ERROR: en producción se requiere BACKUP_ENCRYPTION_KEY_FILE" >&2
   exit 1
 fi
-rm -f /tmp/coter_backup_err.log
 
-# ─── Upload a S3 (opcional) ────────────────────────────────
-if [ "${1:-}" = "s3" ]; then
-  S3_BUCKET="${S3_BACKUP_BUCKET:-}"
-  if [ -z "$S3_BUCKET" ]; then
-    echo "   ⚠️  S3_BACKUP_BUCKET no configurado. Saltando upload."
-  elif command -v aws &> /dev/null; then
-    echo "   ☁️  Subiendo a S3: s3://$S3_BUCKET/"
-    aws s3 cp "$BACKUP_FILE" "s3://$S3_BUCKET/$(basename "$BACKUP_FILE")" --storage-class STANDARD_IA
-    echo "   ✅ Upload completado"
-  else
-    echo "   ⚠️  AWS CLI no instalado. Instala con: pip install awscli"
-    echo "   ⚠️  Saltando upload a S3."
-  fi
+if [[ "${NODE_ENV:-development}" == "production" ]]; then
+  command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker es obligatorio en producción" >&2; exit 1; }
+  echo "Realizando pg_dump desde el servicio postgres de producción..."
+  sudo docker compose -f "$COMPOSE_FILE" exec -T postgres \
+    pg_dump -U coter -d coter --no-owner --no-acl 2>"$ERR_FILE" | gzip > "$RAW_FILE"
+elif [[ -n "${DATABASE_URL:-}" ]]; then
+  echo "Realizando pg_dump mediante DATABASE_URL..."
+  pg_dump "$DATABASE_URL" --no-owner --no-acl 2>"$ERR_FILE" | gzip > "$RAW_FILE"
+elif command -v docker >/dev/null 2>&1; then
+  echo "Realizando pg_dump desde el servicio postgres..."
+  sudo docker compose -f "$COMPOSE_FILE" exec -T postgres \
+    pg_dump -U coter -d coter --no-owner --no-acl 2>"$ERR_FILE" | gzip > "$RAW_FILE"
+else
+  echo "ERROR: define DATABASE_URL o instala Docker" >&2
+  exit 1
 fi
 
-# ─── Limpieza: retener últimos 30 días ─────────────────────
-echo "   🧹 Limpiando backups antiguos (>30 días)..."
-find "$BACKUP_DIR" -name "coter_backup_*.sql.gz" -mtime +30 -delete
-echo "   ✅ Limpieza completada"
+if [[ ! -s "$RAW_FILE" ]]; then
+  echo "ERROR: el backup está vacío" >&2
+  cat "$ERR_FILE" >&2 || true
+  exit 1
+fi
 
-BACKUP_COUNT=$(find "$BACKUP_DIR" -name "coter_backup_*.sql.gz" | wc -l)
-echo ""
-echo "   📊 Total backups almacenados: $BACKUP_COUNT"
-echo ""
-echo "╚══════════════════════════════════════════════╝"
-echo ""
+if [[ -n "${BACKUP_ENCRYPTION_KEY_FILE:-}" ]]; then
+  gpg --batch --yes --symmetric --cipher-algo AES256 \
+    --passphrase-file "$BACKUP_ENCRYPTION_KEY_FILE" \
+    --output "$BACKUP_FILE" "$RAW_FILE"
+  rm -f "$RAW_FILE"
+fi
+
+sha256sum "$BACKUP_FILE" > "$BACKUP_FILE.sha256"
+
+echo "Backup creado: $BACKUP_FILE"
+echo "Checksum: $BACKUP_FILE.sha256"
+
+if [[ "${1:-}" == "s3" ]]; then
+  S3_BUCKET="${S3_BACKUP_BUCKET:-}"
+  if [[ -z "$S3_BUCKET" ]]; then
+    echo "ERROR: S3_BACKUP_BUCKET es obligatorio cuando se usa el argumento s3" >&2
+    exit 1
+  fi
+  command -v aws >/dev/null 2>&1 || { echo "ERROR: AWS CLI no está instalado" >&2; exit 1; }
+  aws s3 cp "$BACKUP_FILE" "s3://$S3_BUCKET/$(basename "$BACKUP_FILE")" --storage-class STANDARD_IA
+  aws s3 cp "$BACKUP_FILE.sha256" "s3://$S3_BUCKET/$(basename "$BACKUP_FILE.sha256")" --storage-class STANDARD_IA
+  echo "Backup y checksum subidos a s3://$S3_BUCKET/"
+fi
+
+find "$BACKUP_DIR" -type f \( -name 'coter_backup_*.sql.gz' -o -name 'coter_backup_*.sql.gz.gpg' -o -name 'coter_backup_*.sha256' \) -mtime +30 -delete

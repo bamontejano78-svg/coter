@@ -2,11 +2,11 @@
 -- Ejecutar: Esta migración se aplica automáticamente al iniciar la app
 
 -- ─── EXTENSIONES ───────────────────────────────────────────────
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ─── TERAPEUTAS ────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS therapists (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name          TEXT NOT NULL,
   email         TEXT UNIQUE NOT NULL,
   password      TEXT NOT NULL,
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS therapists (
 
 -- ─── PACIENTES ─────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS patients (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name          TEXT,
   email         TEXT,
   phone         TEXT,
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS patients (
 
 -- ─── VÍNCULO TERAPEUTA-PACIENTE ────────────────────────────────
 CREATE TABLE IF NOT EXISTS therapist_patients (
-  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id    UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   patient_id      UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   connection_code TEXT NOT NULL,
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS therapist_patients (
 
 -- ─── CÓDIGOS DE CONEXIÓN ───────────────────────────────────────
 CREATE TABLE IF NOT EXISTS connection_codes (
-  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id    UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   code            TEXT UNIQUE NOT NULL,
   duration_hours  INTEGER DEFAULT 168,
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS connection_codes (
 
 -- ─── CHECK-INS ─────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS check_ins (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   patient_id    UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   mood          INTEGER NOT NULL CHECK (mood >= 1 AND mood <= 10),
   anxiety       INTEGER NOT NULL CHECK (anxiety >= 1 AND anxiety <= 10),
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS check_ins (
 
 -- ─── MENSAJES ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS messages (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id  UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   patient_id    UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   message       TEXT NOT NULL,
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS messages (
 
 -- ─── ASIGNACIONES / TAREAS ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS assignments (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id  UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   patient_id    UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   type          TEXT NOT NULL,
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS assignments (
 
 -- ─── OBJETIVOS ─────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS goals (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   patient_id    UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   title         TEXT NOT NULL,
   metric        TEXT NOT NULL,
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS goals (
 
 -- ─── PLANTILLAS DE TAREAS TCC ──────────────────────────────────
 CREATE TABLE IF NOT EXISTS task_templates (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id  UUID REFERENCES therapists(id) ON DELETE CASCADE,
   category      TEXT NOT NULL,
   title         TEXT NOT NULL,
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS task_templates (
 
 -- ─── NOTIFICACIONES ────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS notifications (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   patient_id    UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   type          TEXT NOT NULL,
   title         TEXT NOT NULL,
@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 -- ─── NOTAS CLÍNICAS (SOAP) ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS clinical_notes (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   patient_id    UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   therapist_id  UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   subjective    TEXT,
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS clinical_notes (
 
 -- ─── RESETEO DE CONTRASEÑA ─────────────────────────────────────
 CREATE TABLE IF NOT EXISTS password_resets (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id  UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   token         TEXT UNIQUE NOT NULL,
   expires_at    TIMESTAMPTZ NOT NULL,

@@ -2,8 +2,8 @@
 
 const path = require('path');
 const savedNodeEnv = process.env.NODE_ENV;
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override: true });
-// Restore NODE_ENV set by cross-env (override:true would overwrite it)
+require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override: false });
+// Restore NODE_ENV set by cross-env if it was provided explicitly.
 if (savedNodeEnv) process.env.NODE_ENV = savedNodeEnv;
 
 const { Pool } = require('pg');

@@ -3,8 +3,8 @@
  * Coter Pro — Staging Server (HTTPS)
  * 
  * Arranca el servidor Express con HTTPS usando los certificados
- * self-signed en nginx/certs/. Se conecta a la BD configurada
- * en .env.staging (Neon PostgreSQL).
+ * self-signed en nginx/certs/. Para el flujo oficial se recomienda
+ * docker-compose.staging.yml, que usa PostgreSQL local y Nginx.
  * 
  * Uso: node scripts/start-staging.js
  * ═══════════════════════════════════════════════════════════════
@@ -53,7 +53,7 @@ const HTTPS_PORT = parseInt(process.env.STAGING_HTTPS_PORT, 10) || 8443;
 
 // Determinar la DATABASE_URL
 const dbUrl = process.env.DATABASE_URL || '';
-const isNeon = dbUrl.includes('neon.tech');
+const isManaged = /(neon\.tech|render\.com|railway\.app|supabase\.co)/i.test(dbUrl);
 const maskedUrl = dbUrl ? dbUrl.replace(/\/\/[^:]+:[^@]+@/, '//***:***@') : 'no configurada';
 
 console.log('');
@@ -61,7 +61,7 @@ console.log('╔═════════════════════�
 console.log('║   🧠 Coter Pro — Staging                    ║');
 console.log('╠══════════════════════════════════════════════╣');
 console.log('║   Entorno:     ' + process.env.NODE_ENV.padEnd(30) + '║');
-console.log('║   BD:          ' + (isNeon ? 'Neon PostgreSQL'.padEnd(30) : maskedUrl.substring(0,30).padEnd(30)) + '║');
+console.log('║   BD:          ' + (isManaged ? 'PostgreSQL gestionada'.padEnd(30) : maskedUrl.substring(0,30).padEnd(30)) + '║');
 console.log('║   HTTP:        http://localhost:' + String(PORT).padEnd(20) + '║');
 console.log('║   HTTPS:       https://localhost:' + String(HTTPS_PORT).padEnd(16) + '║');
 console.log('╚══════════════════════════════════════════════╝');

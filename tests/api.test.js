@@ -8,6 +8,7 @@ const request = require('supertest');
 const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
 const bus = require('../utils/eventBus');
+const fcm = require('../utils/fcm');
 
 // Mockear config antes de cargar la app
 process.env.NODE_ENV = 'test';
@@ -253,6 +254,32 @@ describe('Patient API', () => {
       expect(res.statusCode).toBe(400);
     });
   });
+    test('connection code redemption is atomic under concurrent requests', async () => {
+      const codeRes = await request(app)
+        .post('/api/v1/therapists/connection-codes')
+        .set('Authorization', 'Bearer ' + therapistToken)
+        .send({ duration_hours: 24, max_uses: 1 });
+      const attempts = await Promise.all([
+        request(app)
+          .post('/api/v1/patients/connect')
+          .send({ connection_code: codeRes.body.code }),
+        request(app)
+          .post('/api/v1/patients/connect')
+          .send({ connection_code: codeRes.body.code }),
+      ]);
+      const statuses = attempts.map(r => r.statusCode).sort();
+      expect(statuses).toEqual([200, 400]);
+      const { rows } = await pool.query(
+        'SELECT uses FROM connection_codes WHERE code = $1',
+        [codeRes.body.code]
+      );
+      expect(rows[0].uses).toBe(1);
+      const { rows: links } = await pool.query(
+        'SELECT id FROM therapist_patients WHERE connection_code = $1',
+        [codeRes.body.code]
+      );
+      expect(links).toHaveLength(1);
+    });
 
   // ─── CHECK-INS ─────────────────────────────────────────
   describe('Check-ins', () => {
@@ -331,6 +358,54 @@ describe('Patient API', () => {
       expect(res.body.message_id).toBeDefined();
     });
 
+    test('patient message push to therapist does not expose message content', async () => {
+      const sensitive = 'Me autolesione ayer y necesito hablar de trauma familiar';
+      const pushSpy = jest.spyOn(fcm, 'sendToTherapist').mockResolvedValue({ sent: 1, failed: 0 });
+      try {
+        const res = await request(app)
+          .post('/api/v1/patients/' + patientId + '/messages')
+          .set('Authorization', 'Bearer ' + authToken)
+          .send({ message: sensitive });
+        expect(res.statusCode).toBe(200);
+        expect(pushSpy).toHaveBeenCalledWith(
+          therapistId,
+          expect.objectContaining({
+            title: 'Nuevo mensaje de tu paciente',
+            body: 'Abre Coter Pro para leerlo de forma segura.',
+          })
+        );
+        const payload = JSON.stringify(pushSpy.mock.calls[0][1]);
+        expect(payload).not.toContain('autolesione');
+        expect(payload).not.toContain('trauma familiar');
+      } finally {
+        pushSpy.mockRestore();
+      }
+    });
+
+    test('therapist message push to patient does not expose message content', async () => {
+      const sensitive = 'Trabajaremos el episodio de panico en urgencias';
+      const pushSpy = jest.spyOn(fcm, 'sendToPatient').mockResolvedValue({ sent: 1, failed: 0 });
+      try {
+        const res = await request(app)
+          .post('/api/v1/therapists/patients/' + patientId + '/messages')
+          .set('Authorization', 'Bearer ' + therapistToken)
+          .send({ message: sensitive });
+        expect(res.statusCode).toBe(200);
+        expect(pushSpy).toHaveBeenCalledWith(
+          patientId,
+          expect.objectContaining({
+            title: 'Nuevo mensaje de tu terapeuta',
+            body: 'Abre Coter Pro para leerlo de forma segura.',
+          })
+        );
+        const payload = JSON.stringify(pushSpy.mock.calls[0][1]);
+        expect(payload).not.toContain('panico');
+        expect(payload).not.toContain('urgencias');
+      } finally {
+        pushSpy.mockRestore();
+      }
+    });
+
     test('POST /:patientId/messages rejects empty message', async () => {
       const res = await request(app)
         .post('/api/v1/patients/' + patientId + '/messages')
@@ -378,6 +453,35 @@ describe('Patient API', () => {
           instructions: 'Anota 3 pensamientos negativos y busca evidencia a favor y en contra',
         });
       assignmentId = res.body.assignment_id;
+    });
+
+    test('assignment push to patient does not expose title or instructions', async () => {
+      const pushSpy = jest.spyOn(fcm, 'sendToPatient').mockResolvedValue({ sent: 1, failed: 0 });
+      try {
+        const res = await request(app)
+          .post('/api/v1/therapists/patients/' + patientId + '/assignments')
+          .set('Authorization', 'Bearer ' + therapistToken)
+          .send({
+            type: 'exposure',
+            title: 'Exposicion al metro por fobia especifica',
+            instructions: 'Anota sintomas de ansiedad y pensamientos intrusivos',
+            due_date: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
+          });
+        expect(res.statusCode).toBe(200);
+        expect(pushSpy).toHaveBeenCalledWith(
+          patientId,
+          expect.objectContaining({
+            title: 'Nueva tarea asignada',
+            body: 'Tienes una nueva tarea con fecha de vencimiento.',
+          })
+        );
+        const payload = JSON.stringify(pushSpy.mock.calls[0][1]);
+        expect(payload).not.toContain('metro');
+        expect(payload).not.toContain('fobia especifica');
+        expect(payload).not.toContain('pensamientos intrusivos');
+      } finally {
+        pushSpy.mockRestore();
+      }
     });
 
     test('GET /:patientId/assignments returns patient tasks', async () => {
@@ -451,13 +555,18 @@ describe('Patient API', () => {
 
       // Verificar que la sesión se guardó en BD
       const { rows: sessRows } = await pool.query(
-        'SELECT id, exercise_kind, responses, is_complete FROM exercise_sessions WHERE id = $1',
+        'SELECT id, exercise_kind, responses, encrypted_blob, is_complete FROM exercise_sessions WHERE id = $1',
         [res.body.session_id]
       );
       expect(sessRows.length).toBe(1);
       expect(sessRows[0].exercise_kind).toBe('widget_ba_activity_diary');
       expect(sessRows[0].is_complete).toBe(true);
-      expect(sessRows[0].responses).toHaveProperty('mood', 7);
+      // Los widgets pueden contener texto clínico libre: se conserva cifrado
+      // en encrypted_blob y no se persiste en JSONB en claro.
+      expect(sessRows[0].responses).toEqual({});
+      expect(typeof sessRows[0].encrypted_blob).toBe('string');
+      expect(sessRows[0].encrypted_blob.length).toBeGreaterThan(0);
+      expect(sessRows[0].encrypted_blob).not.toContain('Caminar');
 
       // Verificar que el assignment se marcó como completado
       const { rows: aRows } = await pool.query(
@@ -1530,6 +1639,67 @@ describe('EventBus publish contract (SSE hookpoints)', () => {
     expect(calls.some(c => c[0] === 'patient:' + patientInfo.id)).toBe(false);
   });
 
+  test('clinical SOAP note is encrypted at rest and decrypted in API responses', async () => {
+    const sensitive = {
+      subjective: 'Paciente describe ideacion autolitica pasajera',
+      objective: 'Llanto y bloqueo durante la sesion',
+      assessment: 'Riesgo moderado con factores protectores',
+      plan: 'Plan de seguridad y seguimiento en 48 horas',
+    };
+
+    const create = await request(app)
+      .post('/api/v1/therapists/patients/' + patientInfo.id + '/clinical-notes')
+      .set('Authorization', 'Bearer ' + therapistInfo.token)
+      .send(sensitive);
+    expect(create.statusCode).toBe(200);
+    expect(create.body.note).toMatchObject(sensitive);
+
+    const { rows } = await pool.query(
+      'SELECT subjective, objective, assessment, plan FROM clinical_notes WHERE id = $1',
+      [create.body.note.id]
+    );
+    expect(rows).toHaveLength(1);
+    for (const field of Object.keys(sensitive)) {
+      expect(rows[0][field]).not.toBe(sensitive[field]);
+      expect(rows[0][field]).toMatch(/^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/);
+      expect(rows[0][field]).not.toContain('autolitica');
+      expect(rows[0][field]).not.toContain('seguridad');
+    }
+
+    const list = await request(app)
+      .get('/api/v1/therapists/patients/' + patientInfo.id + '/clinical-notes')
+      .set('Authorization', 'Bearer ' + therapistInfo.token);
+    expect(list.statusCode).toBe(200);
+    const note = list.body.notes.find(n => n.id === create.body.note.id);
+    expect(note).toMatchObject(sensitive);
+  });
+
+  test('clinical session summary is encrypted at rest and decrypted in API responses', async () => {
+    const notesSummary = 'Sesion centrada en trauma infantil y plan de seguridad';
+    const create = await request(app)
+      .post('/api/v1/therapists/patients/' + patientInfo.id + '/clinical-sessions')
+      .set('Authorization', 'Bearer ' + therapistInfo.token)
+      .send({ type: 'online', status: 'completed', duration_min: 50, notes_summary: notesSummary });
+    expect(create.statusCode).toBe(200);
+    expect(create.body.session.notes_summary).toBe(notesSummary);
+
+    const { rows } = await pool.query(
+      'SELECT notes_summary FROM clinical_sessions WHERE id = $1',
+      [create.body.session.id]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].notes_summary).not.toBe(notesSummary);
+    expect(rows[0].notes_summary).toMatch(/^[0-9a-f]+:[0-9a-f]+:[0-9a-f]+$/);
+    expect(rows[0].notes_summary).not.toContain('trauma infantil');
+
+    const list = await request(app)
+      .get('/api/v1/therapists/patients/' + patientInfo.id + '/clinical-sessions')
+      .set('Authorization', 'Bearer ' + therapistInfo.token);
+    expect(list.statusCode).toBe(200);
+    const session = list.body.sessions.find(s => s.id === create.body.session.id);
+    expect(session.notes_summary).toBe(notesSummary);
+  });
+
   // ─── POST /api/v1/patients/connect ────────────────────────────────
   test('patient connecting publishes patient:connected to therapist topic', async () => {
     // Necesitamos un código fresco para conectar un paciente nuevo.
@@ -2288,7 +2458,9 @@ describe('Task scheduler (cron batch reminders)', () => {
     // Aqui anadimos assertion por columna para guardar contra ese drift.
     const idxQuery = await pool.query(`
       SELECT indexdef FROM pg_indexes
-      WHERE tablename = 'notifications' AND indexname = 'uq_notifications_pending_reminder'
+      WHERE schemaname = current_schema()
+        AND tablename = 'notifications'
+        AND indexname = 'uq_notifications_pending_reminder'
     `);
     expect(idxQuery.rows.length).toBe(1);
     const indexdef = idxQuery.rows[0].indexdef;
@@ -2967,5 +3139,33 @@ describe('T6: Therapist view GET /patients/:id enriches assignments with latest_
     expect(r.statusCode).toBe(404);
     expect(r.body.success).toBe(false);
   });
-});
+  test('unlinked therapist cannot write messages, goals, or assignments', async () => {
+    const messageRes = await request(app)
+      .post('/api/v1/therapists/patients/' + patient.id + '/messages')
+      .set('Authorization', 'Bearer ' + otherTherapist.token)
+      .send({ message: 'unauthorized message' });
+    expect(messageRes.statusCode).toBe(404);
 
+    const goalRes = await request(app)
+      .post('/api/v1/therapists/patients/' + patient.id + '/goals')
+      .set('Authorization', 'Bearer ' + otherTherapist.token)
+      .send({ title: 'Unauthorized goal', metric: 'days', target_value: 3, duration_days: 7 });
+    expect(goalRes.statusCode).toBe(404);
+
+    const assignmentId = uuidv4();
+    await pool.query(
+      "INSERT INTO assignments (id, therapist_id, patient_id, type, title, instructions, exercise_kind) VALUES ($1, $2, $3, 'classic', 'Protected', 'Private', 'classic')",
+      [assignmentId, therapist.id, patient.id]
+    );
+    const completionRes = await request(app)
+      .put('/api/v1/therapists/patients/' + patient.id + '/assignments/' + assignmentId)
+      .set('Authorization', 'Bearer ' + otherTherapist.token)
+      .send({ completed: true });
+    expect(completionRes.statusCode).toBe(404);
+    const { rows } = await pool.query(
+      'SELECT status FROM assignments WHERE id = $1',
+      [assignmentId]
+    );
+    expect(rows[0].status).toBe('assigned');
+  });
+});

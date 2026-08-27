@@ -14,7 +14,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════
 
 CREATE TABLE IF NOT EXISTS pioneer_applications (
-  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name        TEXT NOT NULL,
   email       TEXT NOT NULL,
   specialty   TEXT NOT NULL,

@@ -20,6 +20,8 @@ process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/coter_test';
 process.env.JWT_SECRET = 'test_secret_key_for_testing_1234567890';
 process.env.ENCRYPTION_KEY = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+process.env.STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 
 let app;
 let pool;
@@ -533,6 +535,41 @@ describe('Billing Routes — GET /status', () => {
   });
 });
 
+describe('Billing Routes — POST /portal', () => {
+  let therapistToken;
+  let therapistId;
+
+  beforeAll(async () => {
+    const reg = await request(app)
+      .post('/api/v1/therapists/register')
+      .send({
+        name: 'Dr. Portal', email: 'portal-billing@coter.com',
+        specialty: 'psi', password: 'test1234',
+      });
+    therapistToken = reg.body.token;
+    therapistId = reg.body.therapist.id;
+  });
+
+  afterAll(async () => {
+    await pool.query('DELETE FROM billing_events WHERE therapist_id = $1', [therapistId]);
+    await pool.query('DELETE FROM subscriptions WHERE therapist_id = $1', [therapistId]);
+    await pool.query('DELETE FROM therapists WHERE id = $1', [therapistId]);
+  });
+
+  test('requires authentication', async () => {
+    const res = await request(app).post('/api/v1/billing/portal');
+    expect(res.statusCode).toBe(401);
+  });
+
+  test('does not expose a portal when no Stripe customer exists', async () => {
+    const res = await request(app)
+      .post('/api/v1/billing/portal')
+      .set('Authorization', 'Bearer ' + therapistToken);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('PORTAL_UNAVAILABLE');
+  });
+});
+
 describe('Billing Routes — GET /usage', () => {
   let therapistToken;
   let therapistId;
@@ -778,7 +815,9 @@ describe('Migration 008 — Billing tables exist', () => {
   test('billing_started_at column exists on therapist_patients', async () => {
     const { rows } = await pool.query(`
       SELECT column_name FROM information_schema.columns
-      WHERE table_name = 'therapist_patients' AND column_name = 'billing_started_at'
+      WHERE table_schema = current_schema()
+        AND table_name = 'therapist_patients'
+        AND column_name = 'billing_started_at'
     `);
     expect(rows.length).toBe(1);
   });

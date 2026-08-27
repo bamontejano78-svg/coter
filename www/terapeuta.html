@@ -28,8 +28,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/css/therapist.css?v=3">
-<link rel="stylesheet" href="/css/widgets.css?v=4">
+<link rel="stylesheet" href="/css/therapist.css?v=4">
+<link rel="stylesheet" href="/css/widgets.css?v=5">
 </head>
 <body>
 
@@ -45,9 +45,9 @@
 </div>
 <p style="color:var(--muted);font-size:13px;margin-bottom:24px">Panel del terapeuta</p>
 <label for="loginEmail" class="sr-only">Correo electrónico</label>
-<input type="email" id="loginEmail" placeholder="Email" value="ana@coter.com" autocomplete="email">
+<input type="email" id="loginEmail" placeholder="Email" autocomplete="email">
 <label for="loginPassword" class="sr-only">Contraseña</label>
-<input type="password" id="loginPassword" placeholder="Contraseña" value="123456" autocomplete="current-password">
+<input type="password" id="loginPassword" placeholder="Contraseña" autocomplete="current-password">
 <button data-action="login">Iniciar sesión</button>
 <p style="margin-top:18px;font-size:.85rem;color:var(--muted)">¿No tienes cuenta? <a href="#" data-action="show-register" class="link-accent">Regístrate</a></p>
 <p style="margin-top:6px;font-size:.85rem;color:var(--muted)"><a href="/reset-password.html" class="link-accent">¿Olvidaste tu contraseña?</a></p>
@@ -79,7 +79,7 @@
 </div>
 
 <div id="appScreen" class="hidden">
-<button class="mobile-nav-toggle" data-action="toggle-sidebar" aria-label="Abrir menú">
+<button class="mobile-nav-toggle" data-action="toggle-sidebar" aria-label="Abrir menú" aria-expanded="false" aria-controls="sidebar">
 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
 <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
 </svg>
@@ -92,23 +92,25 @@
   </svg>
   <span>Coter Pro</span>
 </div>
-<div class="nav-item active" data-tab="dashboard" aria-current="page">Dashboard</div>
-<div class="nav-item" data-tab="patients">Pacientes</div>
-<div class="nav-item" data-tab="code">Código de acceso</div>
-<div class="nav-item" data-tab="calendar">Calendario</div>
-<div class="nav-item" data-tab="library">Biblioteca TCC</div>
-<div class="nav-item" data-tab="billing">Facturación</div>
-<div class="nav-bottom"><button class="btn btn-d" style="width:100%" data-action="logout">Cerrar sesión</button></div>
+<button type="button" class="nav-item active" data-tab="dashboard" aria-current="page">Dashboard</button>
+<button type="button" class="nav-item" data-tab="patients">Pacientes</button>
+<button type="button" class="nav-item" data-tab="code">Código de acceso</button>
+<button type="button" class="nav-item" data-tab="calendar">Calendario</button>
+<button type="button" class="nav-item" data-tab="library">Biblioteca TCC</button>
+<button type="button" class="nav-item" data-tab="billing">Facturación</button>
+<button type="button" class="nav-item" data-tab="security">🔐 Seguridad</button>
+<div class="nav-bottom"><button class="btn btn-w btn-privacy-toggle" style="width:100%" data-action="toggle-privacy" aria-pressed="false">🔒 Modo privacidad</button><button class="btn btn-d" style="width:100%" data-action="logout">Cerrar sesión</button></div>
 </div>
 <div class="main">
 <div id="tab-dashboard" class="tab-content active">
-<h1>Dashboard <span style="font-size:1rem;font-weight:400;color:#888" id="therapistName"></span><span id="alertsBadge" class="alerts-badge hidden">0</span></h1>
+<div class="page-heading"><div><span class="section-kicker">Resumen de tu consulta</span><h1>Dashboard <span style="font-size:1rem;font-weight:400;color:#888" id="therapistName"></span><span id="alertsBadge" class="alerts-badge hidden">0</span></h1><p class="page-subtitle">Una vista breve para decidir qué necesita tu atención hoy.</p></div><span class="privacy-status" aria-live="polite">🔒 Sesión protegida</span></div>
 <div class="stats-grid">
 <div class="stat-card"><div class="stat-num" id="statPatients">-</div><div class="stat-label">Pacientes activos</div></div>
 <div class="stat-card"><div class="stat-num" id="statCheckins">-</div><div class="stat-label">Check-ins hoy</div></div>
 <div class="stat-card"><div class="stat-num" id="statTasks">-</div><div class="stat-label">Tareas pendientes</div></div>
 <div class="stat-card"><div class="stat-num" id="statRisk" style="color:var(--d)">-</div><div class="stat-label">En riesgo</div></div>
 </div>
+<div class="priority-panel card" id="priorityPanel" aria-labelledby="priorityTitle"><div class="priority-panel-head"><div><span class="section-kicker">Siguiente mejor acción</span><h2 id="priorityTitle">Atención prioritaria</h2></div><span class="priority-pulse" aria-hidden="true"></span></div><div id="priorityContent" class="priority-content"><div class="priority-placeholder">Cargando el resumen de actividad…</div></div></div>
 <div class="period-selector">
   <span class="period-label">Mostrar últimos:</span>
   <button class="period-btn active" data-period="7" aria-pressed="true">7 días</button>
@@ -130,8 +132,8 @@
 
 <div id="tab-patients" class="tab-content">
 <h1>Pacientes <button class="btn btn-p" data-action="refresh-patients">Actualizar</button></h1>
-<div class="card"><table><thead><tr><th>Paciente</th><th>Conectado</th><th>Último check-in</th><th>Ánimo</th><th>Estado</th><th>Acción</th></tr></thead>
-<tbody id="patientsTableBody"><tr><td colspan="6"><div class="skeleton skeleton-table-row"></div></td></tr><tr><td colspan="6"><div class="skeleton skeleton-table-row"></div></td></tr><tr><td colspan="6"><div class="skeleton skeleton-table-row" style="width:90%"></div></td></tr></tbody></table></div>
+<div class="card patient-table-card"><div class="table-scroll"><table><thead><tr><th>Paciente</th><th>Conectado</th><th>Último check-in</th><th>Ánimo</th><th>Estado</th><th>Acción</th></tr></thead>
+<tbody id="patientsTableBody"><tr><td colspan="6"><div class="skeleton skeleton-table-row"></div></td></tr><tr><td colspan="6"><div class="skeleton skeleton-table-row"></div></td></tr><tr><td colspan="6"><div class="skeleton skeleton-table-row" style="width:90%"></div></td></tr></tbody></table></div></div>
 </div>
 
 <div id="tab-calendar" class="tab-content">
@@ -194,10 +196,17 @@
 <p style="margin-top:16px;color:#888;font-size:.85rem">Comparte este código con tus pacientes para que se conecten</p>
 </div>
 </div>
+
+<div id="tab-security" class="tab-content">
+<h1>Seguridad <button class="btn btn-p" data-action="refresh-security" style="font-size:13px">Actualizar</button></h1>
+<div class="card" style="max-width:640px;margin:24px auto">
+<div id="securityContent"><div style="text-align:center;padding:32px"><div class="skeleton skeleton-text"></div><div class="skeleton skeleton-text short"></div></div></div>
+</div>
+</div>
 </div>
 </div>
 
-<div class="modal-overlay" id="patientModal">
+<div class="modal-overlay" id="patientModal" role="dialog" aria-modal="true" aria-labelledby="modalPatientName">
 <div class="modal">
 <div class="modal-header">
 <h2 id="modalPatientName">Paciente</h2>
@@ -208,19 +217,20 @@
 </div>
 </div>
 <div class="modal-tabs" role="tablist" aria-label="Pestañas del paciente">
-<button class="modal-tab active" data-ptab="ptab-chat" role="tab" aria-selected="true" aria-controls="ptab-chat" id="mtab-chat">Chat</button>
+<button class="modal-tab active" data-ptab="ptab-presession" role="tab" aria-selected="true" aria-controls="ptab-presession" id="mtab-presession">🧠 Resumen clínico</button>
+<button class="modal-tab" data-ptab="ptab-chat" role="tab" aria-selected="false" aria-controls="ptab-chat" id="mtab-chat">Chat</button>
 <button class="modal-tab" data-ptab="ptab-checkins" role="tab" aria-selected="false" aria-controls="ptab-checkins" id="mtab-checkins">Check-ins</button>
 <button class="modal-tab" data-ptab="ptab-tasks" role="tab" aria-selected="false" aria-controls="ptab-tasks" id="mtab-tasks">Tareas</button>
 <button class="modal-tab" data-ptab="ptab-goals" role="tab" aria-selected="false" aria-controls="ptab-goals" id="mtab-goals">Objetivos</button>
-<button class="modal-tab" data-ptab="ptab-presession" role="tab" aria-selected="false" aria-controls="ptab-presession" id="mtab-presession">🧠 Pre-sesión</button>
+
 <button class="modal-tab" data-ptab="ptab-insights" role="tab" aria-selected="false" aria-controls="ptab-insights" id="mtab-insights">📊 Insights</button>
 <button class="modal-tab" data-ptab="ptab-sessions" role="tab" aria-selected="false" aria-controls="ptab-sessions" id="mtab-sessions">📅 Sesiones</button>
 <button class="modal-tab" data-ptab="ptab-notes" role="tab" aria-selected="false" aria-controls="ptab-notes" id="mtab-notes">Notas clínicas</button>
 </div>
 <div class="modal-body">
-<div id="ptab-presession" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-presession"><div id="patientPreSession"><div class="empty-msg">Selecciona un paciente para ver la memoria pre-sesión</div></div></div>
+<div id="ptab-presession" class="modal-tab-content active" role="tabpanel" aria-labelledby="mtab-presession"><div id="patientPreSession"><div class="empty-msg">Selecciona un paciente para ver la memoria pre-sesión</div></div></div>
 <div id="ptab-insights" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-insights"><div id="patientInsights"><div class="empty-msg">Selecciona un paciente para ver sus insights semanales</div></div></div>
-<div id="ptab-chat" class="modal-tab-content active" role="tabpanel" aria-labelledby="mtab-chat">
+<div id="ptab-chat" class="modal-tab-content" role="tabpanel" aria-labelledby="mtab-chat">
 <div class="chat-box" id="patientChat" role="log" aria-live="polite" aria-label="Chat con el paciente"><div class="skeleton skeleton-chat left"></div><div class="skeleton skeleton-chat right"></div><div class="skeleton skeleton-chat left" style="width:60%"></div></div>
 <div class="chat-input">
 <label for="chatMsgInput" class="sr-only">Escribe un mensaje para el paciente</label>
@@ -249,7 +259,7 @@
 </div>
 </div>
 
-<script src="/js/therapist.js?v=3"></script>
+<script src="/js/therapist.js?v=4"></script>
 <script src="/js/therapist-presession.js?v=1"></script>
 <script src="/js/therapist-alerts.js?v=1"></script>
 <script src="/js/therapist-billing.js?v=1"></script>

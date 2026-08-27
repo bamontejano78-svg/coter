@@ -1,6 +1,5 @@
 const { Pool } = require('pg');
 const { v4: uuidv4 } = require('uuid');
-const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config/env');
@@ -18,12 +17,19 @@ function createPool() {
   }
 
   // Debug: loggear detalles de conexión SIN la contraseña
+  let databaseHostname = '';
   try {
     const url = new URL(config.DATABASE_URL);
+    databaseHostname = url.hostname.toLowerCase();
     logger.info('Conectando a PostgreSQL: ' + url.host + '/' + url.pathname.replace('/', '') + ' como ' + url.username);
   } catch (e) {
     logger.info('Conectando a PostgreSQL (URL no parseable para debug)');
   }
+
+  const isManagedTlsHost = databaseHostname === 'neon.tech'
+    || databaseHostname.endsWith('.neon.tech')
+    || databaseHostname === 'render.com'
+    || databaseHostname.endsWith('.render.com');
 
   pool = new Pool({
     connectionString: config.DATABASE_URL,
@@ -31,7 +37,9 @@ function createPool() {
     max: config.DB_POOL_MAX,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: config.DB_CONNECTION_TIMEOUT_MS,
-    ssl: config.DATABASE_URL.includes('neon.tech') ? { rejectUnauthorized: false } : undefined,
+    // Render y Neon exigen TLS en sus conexiones gestionadas. Validamos el
+    // certificado del servidor; el PostgreSQL local/Docker se mantiene sin SSL.
+    ssl: isManagedTlsHost ? { rejectUnauthorized: true } : undefined,
   });
 
   pool.on('error', (err) => {
@@ -48,56 +56,74 @@ function getPool() {
 
 // Migraciones
 async function runMigrations() {
-  const p = getPool();
-
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS _migrations (
-      id          SERIAL PRIMARY KEY,
-      name        TEXT UNIQUE NOT NULL,
-      applied_at  TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  const migrationsDir = path.join(__dirname, 'migrations');
-  if (!fs.existsSync(migrationsDir)) {
-    logger.warn('Directorio de migraciones no encontrado');
-    return;
+  let client;
+  try {
+    client = await getPool().connect();
+  } catch (err) {
+    logger.error('No se pudo obtener conexión para migraciones', { error: err.message });
+    throw err;
   }
+  // El lock es de sesión: todas las consultas deben ejecutarse con el mismo
+  // client para que dos réplicas no apliquen una migración simultáneamente.
+  const lockKey = 738451927;
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [lockKey]);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id          SERIAL PRIMARY KEY,
+        name        TEXT UNIQUE NOT NULL,
+        applied_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
 
-  const migrationFiles = fs.readdirSync(migrationsDir)
-    .filter(f => f.endsWith('.sql'))
-    .sort();
-
-  if (migrationFiles.length === 0) {
-    logger.warn('No se encontraron archivos de migracion');
-    return;
-  }
-
-  const { rows: applied } = await p.query('SELECT name FROM _migrations');
-  const appliedNames = new Set(applied.map(r => r.name));
-
-  for (const fileName of migrationFiles) {
-    if (appliedNames.has(fileName)) {
-      logger.debug('Migracion ya aplicada: ' + fileName);
-      continue;
+    const migrationsDir = path.join(__dirname, 'migrations');
+    if (!fs.existsSync(migrationsDir)) {
+      logger.warn('Directorio de migraciones no encontrado');
+      return;
     }
 
-    const sql = fs.readFileSync(path.join(migrationsDir, fileName), 'utf8');
-    logger.info('Aplicando migracion: ' + fileName);
+    const migrationFiles = fs.readdirSync(migrationsDir)
+      .filter(f => f.endsWith('.sql'))
+      .sort();
 
-    try {
-      await p.query(sql);
-      try {
-        await p.query('INSERT INTO _migrations (name) VALUES ($1)', [fileName]);
-      } catch (e) {
-        // 23505 = unique_violation: otro worker ya aplicó la migración (rolling deploy).
-        // El propio ALTER ADD COLUMN IF NOT EXISTS ya es idempotente, así que es seguro.
-        if (e.code !== '23505') throw e;
+    if (migrationFiles.length === 0) {
+      logger.warn('No se encontraron archivos de migracion');
+      return;
+    }
+
+    const { rows: applied } = await client.query('SELECT name FROM _migrations');
+    const appliedNames = new Set(applied.map(r => r.name));
+
+    for (const fileName of migrationFiles) {
+      if (appliedNames.has(fileName)) {
+        logger.debug('Migracion ya aplicada: ' + fileName);
+        continue;
       }
-      logger.info('Migracion aplicada: ' + fileName);
-    } catch (err) {
-      logger.error('Error aplicando migracion ' + fileName, { error: err.message });
-      throw err;
+
+      const sql = fs.readFileSync(path.join(migrationsDir, fileName), 'utf8');
+      logger.info('Aplicando migracion: ' + fileName);
+
+      try {
+        await client.query('BEGIN');
+        await client.query(sql);
+        await client.query('INSERT INTO _migrations (name) VALUES ($1)', [fileName]);
+        await client.query('COMMIT');
+        logger.info('Migracion aplicada: ' + fileName);
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rollbackErr) {
+          logger.error('Error haciendo rollback de migracion ' + fileName, { error: rollbackErr.message });
+        }
+        logger.error('Error aplicando migracion ' + fileName, { error: err.message });
+        throw err;
+      }
+    }
+  } finally {
+    try {
+      await client.query('SELECT pg_advisory_unlock($1)', [lockKey]);
+    } finally {
+      client.release();
     }
   }
 }
@@ -126,33 +152,16 @@ const DEFAULT_TASK_TEMPLATES = [
 
 // Semillas de desarrollo
 async function seedSampleData() {
-  if (config.isProd) {
-    logger.info('Produccion: saltando datos de ejemplo');
+  if (config.isSecureDeployment) {
+    logger.info('Entorno seguro: saltando datos de ejemplo');
     return;
   }
   const p = getPool();
 
   try {
-    const { rows } = await p.query('SELECT COUNT(*) as count FROM therapists');
-    if (parseInt(rows[0].count) > 0) {
-      await seedTaskTemplates();
-      return;
-    }
-
-    const therapistId = uuidv4();
-    const hash = await bcrypt.hash('123456', 10);
-    await p.query(
-      'INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, $2, $3, $4, $5)',
-      [therapistId, 'Dra. Ana Garcia', 'ana@coter.com', hash, 'psicologia']
-    );
-    logger.info('Terapeuta demo: ana@coter.com / 123456');
-
-    await p.query(
-      "INSERT INTO connection_codes (id, therapist_id, code, duration_hours, max_uses, uses, expires_at) VALUES ($1, $2, $3, $4, $5, 0, NOW() + INTERVAL '1 year')",
-      [uuidv4(), therapistId, 'TH-ABC123', 8760, 100]
-    );
-    logger.info('Codigo demo: TH-ABC123');
-
+    // Nunca crear cuentas ni códigos de acceso conocidos al arrancar. Las
+    // cuentas de desarrollo se registran desde la UI o se provisionan fuera
+    // del código mediante un proceso explícito.
     await seedTaskTemplates();
   } catch (err) {
     logger.error('Error en semillas', { error: err.message });
@@ -195,7 +204,7 @@ async function initializeDatabase() {
     const p = getPool();
     await p.query('SELECT 1');
     logger.info('Conectado a PostgreSQL');
-    await p.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
+    await p.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
     await runMigrations();
     await seedSampleData();
     initialized = true;
@@ -203,6 +212,25 @@ async function initializeDatabase() {
   } catch (err) {
     logger.error('Error inicializando BD', { error: err.message, stack: err.stack });
     throw err;
+  }
+}
+
+async function withTransaction(callback) {
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      logger.error('Error haciendo rollback de transacción', { error: rollbackErr.message });
+    }
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
@@ -215,4 +243,4 @@ async function closeDatabase() {
   initialized = false;
 }
 
-module.exports = { initializeDatabase, closeDatabase, getPool };
+module.exports = { initializeDatabase, closeDatabase, getPool, withTransaction };

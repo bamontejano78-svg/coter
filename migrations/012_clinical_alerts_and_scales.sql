@@ -4,7 +4,7 @@
 
 -- ─── 1. Clinical Alerts table ────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS clinical_alerts (
-  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   therapist_id  UUID NOT NULL REFERENCES therapists(id) ON DELETE CASCADE,
   patient_id    UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   alert_type    TEXT NOT NULL,

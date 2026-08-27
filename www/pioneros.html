@@ -6,7 +6,7 @@
 <meta name="description" content="Programa 100 Pioneros de COTER — Solicita acceso exclusivo con condiciones preferenciales para los primeros 100 terapeutas.">
 <title>Coter — Programa 100 Pioneros</title>
 <meta property="og:title" content="Programa 100 Pioneros — Coter">
-<meta property="og:description" content="Acceso exclusivo para los primeros 100 terapeutas. Precio bloqueado de 3 € por paciente activo al mes durante 12 meses.">
+<meta property="og:description" content="Acceso exclusivo para los primeros 100 terapeutas. Primer paciente gratis siempre. Precio bloqueado de 3 € por paciente adicional durante 12 meses.">
 <meta property="og:image" content="https://coter.app/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -16,7 +16,7 @@
 <meta property="og:locale" content="es_ES">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Programa 100 Pioneros — Coter">
-<meta name="twitter:description" content="Sé uno de los primeros 100 terapeutas en Coter Pro con condiciones exclusivas y precio blindado 12 meses.">
+<meta name="twitter:description" content="Sé uno de los primeros 100 terapeutas en Coter Pro. Primer paciente gratis siempre. Precio bloqueado a 3 € por adicional durante 12 meses.">
 <meta name="twitter:image" content="https://coter.app/og-image.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -159,24 +159,24 @@
 
   <div class="hero">
     <h2>Programa <span class="accent-text">100 Pioneros</span></h2>
-    <p>Sé uno de los primeros 100 terapeutas en unirte a COTER con condiciones exclusivas y precio bloqueado durante 12 meses.</p>
+    <p>Sé uno de los primeros 100 terapeutas en unirte a Coter Pro. Primer paciente gratis para siempre. Precio bloqueado a 3 € por paciente adicional durante 12 meses.</p>
   </div>
 
   <div class="benefits">
     <div class="benefit-card">
-      <div class="benefit-icon">€3</div>
-      <div class="benefit-title">Precio Pionero</div>
-      <div class="benefit-desc">Solo €3 por paciente activo al mes. Sin costes fijos.</div>
+      <div class="benefit-icon">🆓</div>
+      <div class="benefit-title">Primer paciente gratis</div>
+      <div class="benefit-desc">El primer paciente activo no cuesta nada, nunca. Sin fecha de expiración.</div>
     </div>
     <div class="benefit-card">
       <div class="benefit-icon">🔒</div>
-      <div class="benefit-title">Precio Blindado</div>
-      <div class="benefit-desc">12 meses de garantía. Tu tarifa no cambia pase lo que pase.</div>
+      <div class="benefit-title">Precio Blindado 12 meses</div>
+      <div class="benefit-desc">Los pacientes adicionales a 3 € cada uno. Precio congelado durante 12 meses aunque suba para el resto.</div>
     </div>
     <div class="benefit-card">
       <div class="benefit-icon">🎯</div>
       <div class="benefit-title">Solo 100 Plazas</div>
-      <div class="benefit-desc">Acceso limitado. Una vez cubiertas, tarifa estándar.</div>
+      <div class="benefit-desc">Acceso limitado. Una vez cubiertas, sin precio bloqueado ni gratuidad extendida.</div>
     </div>
   </div>
 
@@ -227,81 +227,6 @@
   <a href="/" class="back-link">← Volver al inicio</a>
 </div>
 
-<script>
-  (function(){
-    const form = document.getElementById('pioneerForm');
-    const submitBtn = document.getElementById('submitBtn');
-    const successMsg = document.getElementById('successMsg');
-    const applyCard = document.getElementById('applyCard');
-
-    function showError(id, msg) {
-      const el = document.getElementById(id + 'Error');
-      if (el) { el.textContent = msg; el.classList.add('visible'); }
-    }
-    function clearErrors() {
-      document.querySelectorAll('.error-msg').forEach(e => { e.textContent = ''; e.classList.remove('visible'); });
-    }
-
-    form.addEventListener('submit', async function(e) {
-      e.preventDefault();
-      clearErrors();
-
-      const name = document.getElementById('name').value.trim();
-      const email = document.getElementById('email').value.trim();
-      const specialty = document.getElementById('specialty').value.trim();
-      const phone = document.getElementById('phone').value.trim();
-      const message = document.getElementById('message').value.trim();
-
-      // Validación client-side
-      let valid = true;
-      if (!name) { showError('name', 'El nombre es obligatorio'); valid = false; }
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showError('email', 'Email válido obligatorio'); valid = false; }
-      if (!specialty) { showError('specialty', 'La especialidad es obligatoria'); valid = false; }
-      if (!valid) return;
-
-      // Enviar
-      submitBtn.disabled = true;
-      submitBtn.classList.add('loading');
-      submitBtn.textContent = '';
-
-      try {
-        const res = await fetch('/api/v1/pioneers/apply', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email, specialty, phone: phone || undefined, message: message || undefined }),
-        });
-
-        const data = await res.json();
-
-        if (data.success) {
-          form.style.display = 'none';
-          successMsg.style.display = 'block';
-        } else if (data.errors) {
-          data.errors.forEach(err => {
-            if (err.path === 'name') showError('name', err.msg);
-            if (err.path === 'email') showError('email', err.msg);
-            if (err.path === 'specialty') showError('specialty', err.msg);
-          });
-        } else {
-          showToast(data.error || 'Error al enviar la solicitud', 'error');
-        }
-      } catch (err) {
-        showToast('Error de conexión. Intenta de nuevo.', 'error');
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.classList.remove('loading');
-        submitBtn.textContent = 'Solicitar acceso al Programa Pioneros';
-      }
-    });
-
-    function showToast(msg, type) {
-      const toast = document.createElement('div');
-      toast.className = 'toast ' + type;
-      toast.textContent = msg;
-      document.body.appendChild(toast);
-      setTimeout(() => { toast.remove(); }, 4000);
-    }
-  })();
-</script>
+<script src="/js/pioneros.js"></script>
 </body>
 </html>

@@ -156,6 +156,50 @@ async function createCheckoutSession(pool, therapistId, successUrl, cancelUrl) {
 }
 
 /**
+ * Crea una sesión del Customer Portal de Stripe.
+ *
+ * El return_url lo construye el servidor; nunca se acepta una URL del cliente
+ * para evitar redirecciones abiertas.
+ *
+ * @param {Object} pool
+ * @param {string} therapistId
+ * @param {string} returnUrl
+ * @returns {Promise<{url: string, sessionId: string}|null>}
+ */
+async function createBillingPortalSession(pool, therapistId, returnUrl) {
+  const stripe = getStripe();
+  if (!stripe) return null;
+
+  const { rows } = await pool.query(
+    'SELECT stripe_customer_id FROM subscriptions WHERE therapist_id = $1',
+    [therapistId]
+  );
+  const customerId = rows[0]?.stripe_customer_id;
+  if (!customerId) {
+    logger.warn('No hay Stripe customer para abrir Customer Portal', { therapistId });
+    return null;
+  }
+
+  try {
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl,
+    });
+    logger.info('Stripe Customer Portal creado', {
+      therapistId,
+      sessionId: session.id,
+    });
+    return { url: session.url, sessionId: session.id };
+  } catch (err) {
+    logger.error('Error creando Stripe Customer Portal', {
+      error: err.message,
+      therapistId,
+    });
+    return null;
+  }
+}
+
+/**
  * Verifica la firma de un webhook de Stripe.
  *
  * @param {Buffer|string} rawBody - Body sin parsear
@@ -210,9 +254,13 @@ async function reportMonthlyUsage(pool) {
       );
       const patientCount = countRows[0].count;
 
-      if (patientCount === 0) {
+      // El primer paciente activo es siempre gratuito: reportamos count - 1.
+      // Si el terapeuta solo tiene 1 paciente (free tier), no hay nada que facturar.
+      const billableCount = Math.max(0, patientCount - 1);
+
+      if (billableCount === 0) {
         skipped++;
-        continue; // sin pacientes = sin cargo
+        continue; // sin pacientes de pago = sin cargo
       }
 
       // Recuperar la subscription de Stripe para obtener el subscription_item
@@ -233,7 +281,7 @@ async function reportMonthlyUsage(pool) {
       // Reportar uso a Stripe (action: 'set' para valor absoluto mensual)
       const now = Math.floor(Date.now() / 1000);
       const usageRecord = await stripe.subscriptionItems.createUsageRecord(meteredItem.id, {
-        quantity: patientCount,
+        quantity: billableCount,
         timestamp: now,
         action: 'set',
       });
@@ -241,14 +289,14 @@ async function reportMonthlyUsage(pool) {
       // Guardar snapshot en billing_usage
       const periodStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
       const periodEnd = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0);
-      const amountCents = patientCount * sub.price_per_patient_cents;
+      const amountCents = billableCount * sub.price_per_patient_cents;
 
       await pool.query(
         `INSERT INTO billing_usage (id, therapist_id, period_start, period_end, patient_count, amount_cents, stripe_usage_record_id, reported_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
          ON CONFLICT (therapist_id, period_start) DO UPDATE
          SET patient_count = $5, amount_cents = $6, stripe_usage_record_id = $7, reported_at = NOW()`,
-        [uuidv4(), sub.therapist_id, periodStart, periodEnd, patientCount, amountCents, usageRecord.id]
+        [uuidv4(), sub.therapist_id, periodStart, periodEnd, billableCount, amountCents, usageRecord.id]
       );
 
       // Registrar evento de billing
@@ -256,7 +304,8 @@ async function reportMonthlyUsage(pool) {
         `INSERT INTO billing_events (id, therapist_id, event_type, metadata)
          VALUES ($1, $2, 'usage_reported', $3)`,
         [uuidv4(), sub.therapist_id, JSON.stringify({
-          patientCount,
+          totalPatientCount: patientCount,
+          billableCount,
           amountCents,
           periodStart: periodStart.toISOString().slice(0, 10),
           periodEnd: periodEnd.toISOString().slice(0, 10),
@@ -267,7 +316,8 @@ async function reportMonthlyUsage(pool) {
       reported++;
       logger.info('Uso reportado a Stripe', {
         therapistId: sub.therapist_id,
-        patientCount,
+        totalPatientCount: patientCount,
+        billableCount,
         amountCents,
       });
     } catch (err) {
@@ -306,6 +356,7 @@ module.exports = {
   getStripe,
   createStripeCustomer,
   createCheckoutSession,
+  createBillingPortalSession,
   verifyWebhook,
   reportMonthlyUsage,
 };

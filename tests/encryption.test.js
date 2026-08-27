@@ -1,6 +1,14 @@
 process.env.ENCRYPTION_KEY = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
 
-const { encrypt, decrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
+const {
+  encrypt,
+  decrypt,
+  decryptCheckIns,
+  decryptMessages,
+  decryptAssignments,
+  decryptClinicalNotes,
+  decryptClinicalSessions,
+} = require('../utils/encryption');
 
 describe('Encryption', () => {
   test('encrypts and decrypts text', () => {
@@ -50,5 +58,31 @@ describe('Encryption', () => {
     const encrypted = assignments.map(a => ({ ...a, instructions: encrypt(a.instructions) }));
     const decrypted = decryptAssignments(encrypted);
     expect(decrypted[0].instructions).toBe('do this');
+  });
+
+  test('decryptClinicalNotes handles SOAP fields', () => {
+    const notes = [{
+      id: '1',
+      subjective: encrypt('Paciente refiere ansiedad intensa'),
+      objective: encrypt('Respiracion agitada'),
+      assessment: encrypt('Crisis de panico probable'),
+      plan: encrypt('Practicar respiracion diafragmatica'),
+    }];
+    const decrypted = decryptClinicalNotes(notes);
+    expect(decrypted[0].subjective).toBe('Paciente refiere ansiedad intensa');
+    expect(decrypted[0].objective).toBe('Respiracion agitada');
+    expect(decrypted[0].assessment).toBe('Crisis de panico probable');
+    expect(decrypted[0].plan).toBe('Practicar respiracion diafragmatica');
+  });
+
+  test('decryptClinicalSessions handles notes_summary and embedded notes', () => {
+    const sessions = [{
+      id: '1',
+      notes_summary: encrypt('Resumen clinico sensible'),
+      notes: [{ id: 'n1', subjective: encrypt('Subjetivo sensible') }],
+    }];
+    const decrypted = decryptClinicalSessions(sessions);
+    expect(decrypted[0].notes_summary).toBe('Resumen clinico sensible');
+    expect(decrypted[0].notes[0].subjective).toBe('Subjetivo sensible');
   });
 });

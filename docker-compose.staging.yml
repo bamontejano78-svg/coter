@@ -13,9 +13,8 @@ services:
     environment:
       POSTGRES_DB: coter_staging
       POSTGRES_USER: coter
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-coter_staging_dev}
-    ports:
-      - '5432:5432'
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
+    # PostgreSQL solo es accesible desde la red Docker; no se publica al host.
     volumes:
       - staging_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -31,28 +30,40 @@ services:
   #   $API_IMAGE: cuando se define (desde CI/CD), usa la imagen pre-build de GHCR.
   #   Si no se define, hace build local desde el Dockerfile.
   api:
-    image: ${API_IMAGE:-}
+    image: ${API_IMAGE:-coter-staging-api:local}
     build:
       context: .
       dockerfile: Dockerfile
     container_name: coter-staging-api
+    # Solo accesible desde el host para smoke tests; el tráfico público pasa por Nginx.
     ports:
-      - '3000:3000'
+      - '127.0.0.1:3000:3000'
     environment:
       NODE_ENV: staging
       PORT: 3000
       HOST: 0.0.0.0
-      DATABASE_URL: postgresql://coter:${DB_PASSWORD:-coter_staging_dev}@postgres:5432/coter_staging
-      JWT_SECRET: ${JWT_SECRET}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost,http://localhost:8080,http://localhost:3000}
+      DATABASE_URL: postgresql://coter:${DB_PASSWORD:?DB_PASSWORD must be set}@postgres:5432/coter_staging
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_PASS: ${SMTP_PASS:-staging-disabled-placeholder}
       APP_URL: ${APP_URL:-https://localhost}
-      LOG_LEVEL: debug
+      LOG_LEVEL: info
       REFRESH_TOKEN_DAYS: 30
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
+      PIONEER_NOTIFY_EMAIL: ${PIONEER_NOTIFY_EMAIL:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:?STRIPE_SECRET_KEY must be set}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:?STRIPE_WEBHOOK_SECRET must be set}
+      STRIPE_PRICE_ID: ${STRIPE_PRICE_ID:?STRIPE_PRICE_ID must be set}
+      FCM_SERVER_KEY: ${FCM_SERVER_KEY:-}
+      FCM_SENDER_ID: ${FCM_SENDER_ID:-}
+      CRON_REMINDERS: ${CRON_REMINDERS:-}
+      CRON_BILLING: ${CRON_BILLING:-}
+      CRON_ALERTS: ${CRON_ALERTS:-}
+      CRON_REMINDERS_RUN_AT_START: ${CRON_REMINDERS_RUN_AT_START:-false}
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,9 +81,7 @@ services:
   nginx:
     build:
       context: ./nginx
-      dockerfile: Dockerfile
-      args:
-        ENV: staging
+      dockerfile: Dockerfile.staging
     container_name: coter-staging-nginx
     ports:
       - '80:80'

@@ -95,7 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_assignments_kind
 --     otro dia). El front-end tomara la ultima por updated_at.
 
 CREATE TABLE IF NOT EXISTS exercise_sessions (
-  id              UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   assignment_id   UUID        NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
   patient_id      UUID        NOT NULL REFERENCES patients(id)    ON DELETE CASCADE,
   exercise_kind   TEXT        NOT NULL,

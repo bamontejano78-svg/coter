@@ -29,7 +29,7 @@ function parseCookies(req) {
 function cookieBaseOptions(maxAge) {
   return {
     httpOnly: true,
-    secure: config.isProd,
+    secure: config.isSecureDeployment,
     sameSite: 'lax',
     path: '/',
     maxAge,

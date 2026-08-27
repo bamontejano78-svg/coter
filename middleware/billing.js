@@ -47,9 +47,11 @@ async function billingGuard(req, res, next) {
         code: access.code,
         reason: access.reason,
       });
-      return res.status(402).json({
+      return res.status(access.code === 'EMAIL_NOT_VERIFIED' ? 403 : 402).json({
         success: false,
-        error: 'Suscripción inactiva. Renueva tu plan para continuar.',
+        error: access.code === 'EMAIL_NOT_VERIFIED'
+          ? 'Confirma tu email antes de continuar. Revisa tu bandeja de entrada.'
+          : 'Suscripción inactiva. Renueva tu plan para continuar.',
         code: access.code,
       });
     }
@@ -59,8 +61,12 @@ async function billingGuard(req, res, next) {
     next();
   } catch (err) {
     logger.error('Error en billingGuard', { error: err.message, therapistId });
-    // Fail-open: no bloqueamos a terapeutas legítimos por fallo transitorio
-    next();
+    // Fail-closed: no conceder acceso clínico si no se puede verificar el pago.
+    return res.status(503).json({
+      success: false,
+      error: 'No se pudo verificar la suscripción. Intenta de nuevo más tarde.',
+      code: 'BILLING_UNAVAILABLE',
+    });
   }
 }
 

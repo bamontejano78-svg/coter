@@ -10,7 +10,7 @@
 //     y monta la experiencia interactiva en `parent`.
 //
 //   getWidgetState(aid) → { widget, data }
-//     Recupera el estado guardado en localStorage para continuar donde se dejó.
+//     Recupera el estado volatil de esta pestaña.
 //
 //   isWidgetTemplate(title, category) → boolean
 //     Devuelve true si esta plantilla tiene un widget interactivo asociado.
@@ -57,14 +57,17 @@
     return node;
   }
 
-  // ─── Persistencia local (localStorage) ──────────────────────────────
-  var STORAGE_KEY = 'coter_widget_states';
+  // ─── Estado volatil en memoria ──────────────────────────────────────
+  // Los widgets clasicos capturan texto libre clinico. Para produccion no
+  // persistimos PHI en localStorage/sessionStorage; las respuestas solo se
+  // guardan en servidor al completar, cifradas por la API.
+  var volatileStates = {};
 
   function loadStates() {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (e) { return {}; }
+    return Object.assign({}, volatileStates);
   }
   function saveStates(states) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(states)); } catch (e) {}
+    volatileStates = Object.assign({}, states);
   }
 
   ns.getWidgetState = function (aid) {
@@ -78,7 +81,7 @@
     saveStates(states);
   }
 
-  // Limpia el estado de localStorage al completar (evita acumulación indefinida)
+  // Limpia el estado volatil al completar.
   ns.clearWidgetState = function (aid) {
     var states = loadStates();
     delete states[aid];

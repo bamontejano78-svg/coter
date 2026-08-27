@@ -1668,3 +1668,16 @@ h1 {
     animation-duration: .001ms !important;
   }
 }
+
+/* ─── UX refresh: keyboard focus and resilient mobile actions ─── */
+:focus-visible { outline:3px solid color-mix(in srgb, var(--primary) 55%, transparent); outline-offset:3px; }
+.button { min-height:52px; }
+.nav-links a, .login-link, .site-footer a { min-height:44px; display:inline-flex; align-items:center; }
+
+@media (max-width:680px) {
+  .site-header { align-items:center; }
+  .header-actions { margin-left:auto; }
+  .hero-proof { gap:8px; }
+  .hero-proof div { padding:12px; }
+  .hero-proof strong { font-size:20px; }
+}

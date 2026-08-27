@@ -26,6 +26,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
+export API_IMAGE="${API_IMAGE:?API_IMAGE debe ser un tag o digest de release para inicializar producción}"
+if [[ "$API_IMAGE" == *":main"* ]]; then
+  echo "❌ API_IMAGE no puede usar :main en producción"
+  exit 1
+fi
 
 CERT_PATH="/etc/letsencrypt/live/coter.app/fullchain.pem"
 
@@ -40,8 +45,8 @@ if [ -f "$CERT_PATH" ]; then
   echo "✅ El certificado ya existe en $CERT_PATH"
   echo "   No es necesario ejecutar este script de nuevo."
   echo ""
-  echo "   Para renovar: certbot renew"
-  echo "   O espera a que el contenedor certbot lo haga automáticamente."
+  echo "   Para renovar: bash scripts/renew-ssl.sh"
+  echo "   Ejecuta el job de renovación del host: bash scripts/renew-ssl.sh"
   exit 0
 fi
 
@@ -56,12 +61,12 @@ fi
 
 # ─── 3. Arrancar solo postgres + API (sin nginx) ───────
 echo "⏳ Iniciando base de datos y API..."
-docker compose up -d postgres api 2>&1 | tail -1
+docker compose --env-file .env -f docker-compose.yml up -d postgres api 2>&1 | tail -1
 
 # Esperar a que la API esté lista
 echo "⏳ Esperando a que la API responda..."
 for i in $(seq 1 30); do
-  if curl -s http://localhost:3000/api/health 2>/dev/null | grep -q '"status":"ok"'; then
+  if docker compose exec -T api node -e "require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1))" >/dev/null 2>&1; then
     echo "   ✅ API lista"
     break
   fi
@@ -73,15 +78,20 @@ echo ""
 # ─── 4. Iniciar nginx con config INIT (solo HTTP) ──────
 echo "⏳ Iniciando nginx en modo INIT (solo HTTP)..."
 # Usar el config init en vez del de producción
-docker compose stop nginx 2>/dev/null || true
+docker compose --env-file .env -f docker-compose.yml stop nginx 2>/dev/null || true# Iniciar nginx con config init en la misma red que la API.
+API_CONTAINER="$(docker compose --env-file .env -f docker-compose.yml ps -q api)"
+DOCKER_NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' "$API_CONTAINER")"
+if [[ -z "$DOCKER_NETWORK" ]]; then
+  echo "❌ No se pudo determinar la red Docker de la API"
+  exit 1
+fi
 
-# Iniciar nginx con config init
 docker run -d --rm \
   --name coter-nginx-init \
-  --network coter_coter \
+  --network "$DOCKER_NETWORK" \
   -p 80:80 \
   -v "$PROJECT_DIR/nginx/nginx.init.conf:/etc/nginx/conf.d/default.conf:ro" \
-  -v certbot_www:/var/www/certbot \
+  -v coter_certbot_www:/var/www/certbot \
   nginx:1.27-alpine 2>/dev/null
 
 sleep 3
@@ -103,7 +113,7 @@ echo ""
 
 docker run --rm \
   -v /etc/letsencrypt:/etc/letsencrypt \
-  -v certbot_www:/var/www/certbot \
+  -v coter_certbot_www:/var/www/certbot \
   certbot/certbot certonly --webroot \
   -w /var/www/certbot \
   -d coter.app -d app.coter.app \
@@ -130,7 +140,7 @@ echo "🔄 Cambiando a nginx producción (HTTPS)..."
 docker stop coter-nginx-init 2>/dev/null || true
 
 # ─── 7. Iniciar nginx con config PRODUCCIÓN ─────────────
-docker compose up -d nginx 2>&1 | tail -1
+docker compose --env-file .env -f docker-compose.yml up -d nginx 2>&1 | tail -1
 
 sleep 3
 
@@ -144,10 +154,9 @@ else
   echo "   curl -k https://localhost/api/health"
 fi
 
-# ─── 9. Iniciar certbot (renovación automática) ─────────
+# ─── 9. Verificar que el job de renovación está disponible ───
 echo ""
-echo "⏳ Iniciando renovación automática..."
-docker compose up -d certbot 2>&1 | tail -1
+echo "ℹ️  Para renovar posteriormente: bash scripts/renew-ssl.sh"
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"
@@ -156,7 +165,7 @@ echo "╠═══════════════════════�
 echo "║                                              ║"
 echo "║   🌐 App:    https://coter.app               ║"
 echo "║   🩺 Health: https://coter.app/api/health    ║"
-echo "║   🔄 Renovación automática cada 12h          ║"
+echo "║   🔄 Renovación automática mediante cron del host ║"
 echo "║                                              ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""

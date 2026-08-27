@@ -66,13 +66,16 @@ else
     echo "   ⚠️  No se pudieron generar los certificados. Usando los existentes si hay."
 fi
 
-# ─── 5. Crear archivo .env.staging ────────────────────────
+# ─── 5. Crear archivo .env.staging si falta ───────────────
 echo ""
-echo "📝 Creando .env.staging..."
+if [ -f ".env.staging" ]; then
+    echo "📝 .env.staging ya existe; no se sobrescribe"
+else
+    echo "📝 Creando .env.staging..."
 
-DB_PASSWORD="${DB_PASSWORD:-coter_staging_$(openssl rand -hex 4 2>/dev/null || node -e 'console.log(require(\"crypto\").randomBytes(4).toString(\"hex\"))')}"
+    DB_PASSWORD="${DB_PASSWORD:-$(openssl rand -hex 24 2>/dev/null || node -e 'console.log(require(\"crypto\").randomBytes(24).toString(\"hex\"))')}"
 
-cat > .env.staging << EOF
+    cat > .env.staging << EOF
 # ═══════════════════════════════════════════════════════════
 # Coter Pro — Variables de Entorno (Staging)
 # Generado automáticamente por setup-staging.sh
@@ -83,23 +86,32 @@ cat > .env.staging << EOF
 NODE_ENV=staging
 
 # ─── Base de Datos ───────────────────────────────────────
-DATABASE_URL=postgresql://coter:${DB_PASSWORD}@postgres:5432/coter_staging
+# Docker Compose construye DATABASE_URL desde DB_PASSWORD.
 DB_PASSWORD=${DB_PASSWORD}
+API_IMAGE=coter-staging-api:local
 
 # ─── Seguridad ───────────────────────────────────────────
 JWT_SECRET=${JWT_SECRET}
 ENCRYPTION_KEY=${ENCRYPTION_KEY}
+ADMIN_PASSWORD=staging-admin-$(openssl rand -hex 16 2>/dev/null || node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')
 REFRESH_TOKEN_DAYS=30
 
 # ─── CORS ────────────────────────────────────────────────
 CORS_ORIGINS=https://localhost,https://app.localhost,http://localhost:8080,http://localhost:3000
 
-# ─── Email (opcional en staging) ─────────────────────────
+# ─── Email (requerido en staging real) ───────────────────
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=
-SMTP_PASS=
+SMTP_PASS=REEMPLAZAR_CON_API_KEY_SMTP_STAGING
 SMTP_FROM=staging@coter.app
+
+# Stripe de prueba: usa claves test reales del dashboard de Stripe.
+STRIPE_SECRET_KEY=sk_test_REEMPLAZAR
+STRIPE_WEBHOOK_SECRET=whsec_REEMPLAZAR
+STRIPE_PRICE_ID=price_REEMPLAZAR
+FCM_SERVER_KEY=
+FCM_SENDER_ID=
 APP_URL=https://localhost
 
 # ─── Rate Limiting (más permisivo en staging) ────────────
@@ -107,25 +119,42 @@ RATE_LIMIT_WINDOW_MS=900000
 RATE_LIMIT_MAX=200
 
 # ─── Logging ─────────────────────────────────────────────
-LOG_LEVEL=debug
+LOG_LEVEL=info
 EOF
 
-echo "   ✅ .env.staging creado con secretos generados"
-echo "   💡 Edita .env.staging para configurar SMTP u otras variables"
+    echo "   ✅ .env.staging creado con secretos internos generados"
+    echo "   💡 Edita .env.staging para configurar SMTP y Stripe de prueba"
+fi
 
-# ─── 6. Construir las imágenes ────────────────────────────
+# ─── 6. Validar preflight antes de construir ──────────────
+echo ""
+echo "🔎 Validando configuración de staging..."
+if ! npm run staging:preflight; then
+    echo ""
+    echo "❌ .env.staging todavía no es apto para staging real."
+    echo "   Completa SMTP_PASS y las claves Stripe de prueba antes de arrancar:"
+    echo "   - STRIPE_SECRET_KEY=sk_test_..."
+    echo "   - STRIPE_WEBHOOK_SECRET=whsec_..."
+    echo "   - STRIPE_PRICE_ID=price_..."
+    echo "   - SMTP_PASS=<API key SMTP real de staging>"
+    echo ""
+    echo "   Después vuelve a ejecutar: bash scripts/setup-staging.sh"
+    exit 1
+fi
+
+# ─── 7. Construir las imágenes ────────────────────────────
 echo ""
 echo "🏗️  Construyendo imágenes Docker..."
 docker compose -f docker-compose.staging.yml --env-file .env.staging build --no-cache
 echo "   ✅ Imágenes construidas"
 
-# ─── 7. Iniciar los servicios ─────────────────────────────
+# ─── 8. Iniciar los servicios ─────────────────────────────
 echo ""
 echo "🚀 Iniciando servicios de staging..."
 docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 echo "   ✅ Servicios iniciando..."
 
-# ─── 8. Esperar a que esté listo ──────────────────────────
+# ─── 9. Esperar a que esté listo ──────────────────────────
 echo ""
 echo "⏳ Esperando a que la API esté lista..."
 for i in $(seq 1 30); do
@@ -138,7 +167,7 @@ for i in $(seq 1 30); do
 done
 echo ""
 
-# ─── 9. Resumen ───────────────────────────────────────────
+# ─── 10. Resumen ──────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════╗"
 echo "║   ✅ Staging listo                           ║"

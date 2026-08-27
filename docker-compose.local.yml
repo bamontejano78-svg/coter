@@ -19,7 +19,7 @@ services:
       DATABASE_URL: postgresql://coter:coter_dev@postgres:5432/coter
       # Secrets de desarrollo (NO USAR EN PRODUCCIÓN)
       JWT_SECRET: dev_jwt_secret_local_only_do_not_use_in_prod_1234567890abcdef
-      ENCRYPTION_KEY: dev_encryption_key_32_bytes_local_only_abcdef0123456789abcdef0123456789
+      ENCRYPTION_KEY: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
       CORS_ORIGINS: http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000
       APP_URL: http://localhost:3000
       ADMIN_PASSWORD: admin_local_dev

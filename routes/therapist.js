@@ -4,19 +4,22 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const QRCode = require('qrcode');
 const { body, query, param, validationResult } = require('express-validator');
 const { getPool } = require('../database');
 const { authWithBilling } = require('../middleware/billing');
 const config = require('../config/env');
 const logger = require('../config/logger');
-const { encrypt, decryptCheckIns, decryptMessages, decryptAssignments } = require('../utils/encryption');
+const { encrypt, decrypt, decryptCheckIns, decryptMessages, decryptAssignments, decryptClinicalNotes, decryptClinicalSessions } = require('../utils/encryption');
+const { generateSecret, verifyTotp, otpauthUrl, generateBackupCodes, normalizeBackupCode } = require('../utils/totp');
+const { authenticateToken } = require('../middleware/auth');
 // Importamos KINDS (whitelist 100% sincronizada con migration 007 CHECK constraint)
 // y getSchema() (resuelve el schema efectivo para cada kind clínico,
 // incluyendo las discriminantes mode/phobia para BA y GE). Ver
 // /utils/exerciseSchemas.test.js para el contrato que esto mantiene.
 const { getSchema, validateSchemaDefinition, KINDS } = require('../utils/exerciseSchemas');
 const { createNotification } = require('../utils/notifications');
-const { audit, auditAccess, auditChange } = require('../utils/audit');
+const { audit, auditAccess, auditChange, auditPatientAccess } = require('../utils/audit');
 const bus = require('../utils/eventBus');
 // Helpers de ejercicios clínicos compartidos con routes/patients.js. Los
 // usamos para enriquecer el GET /patients/:patientId con `latest_session`
@@ -29,6 +32,7 @@ const { SCALE_KINDS, scoreResponses, getScoreHistory } = require('../utils/clini
 const { getAlerts, getUnreadAlerts, markAlertsRead, updateAlertStatus } = require('../utils/clinicalAlerts');
 const { COOKIE_NAMES, getCookie, setTherapistCookies, clearTherapistCookies } = require('../utils/cookies');
 const fcm = require('../utils/fcm');
+const { therapistOwnsActivePatient } = require('../utils/authorization');
 
 // ─── Email transporter (lazy init) ──────────────────────────────
 let mailTransporter = null;
@@ -75,6 +79,83 @@ async function sendRecoveryEmail(email, therapistName, resetToken, resetUrl) {
     logger.error('Error enviando email de recuperación', { error: err.message, email });
     return false;
   }
+}
+
+// ─── Verificación de email ───────────────────────────────────
+/**
+ * Construye la URL de verificación a partir del token raw.
+ * El token raw viaja solo en el email; en BD se guarda el hash sha256.
+ */
+function getVerificationUrl(rawToken) {
+  return `${config.APP_URL}/verify-email.html?token=${rawToken}`;
+}
+
+/**
+ * Envía el email de verificación de cuenta al terapeuta.
+ * Devuelve true si el email se envió, false si SMTP no está configurado.
+ * Nunca lanza excepción.
+ */
+async function sendVerificationEmail(email, therapistName, rawToken) {
+  const transporter = getMailTransporter();
+  if (!transporter) {
+    logger.warn('No se pudo enviar email de verificación — SMTP no configurado');
+    return false;
+  }
+  const verifyUrl = getVerificationUrl(rawToken);
+  try {
+    await transporter.sendMail({
+      from: `"Coter Pro" <${config.SMTP_FROM}>`,
+      to: email,
+      subject: 'Confirma tu email — Coter Pro',
+      text: `Hola ${therapistName},\n\nGracias por registrarte en Coter Pro.\n\nConfirma tu dirección de email haciendo clic en el siguiente enlace (válido por 24 horas):\n${verifyUrl}\n\nSi no creaste esta cuenta, ignora este mensaje.\n\n— El equipo de Coter Pro`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px">
+        <h2 style="color:#6366f1">🧠 Coter Pro</h2>
+        <p>Hola <strong>${therapistName}</strong>,</p>
+        <p>Gracias por registrarte. Solo queda confirmar tu dirección de email.</p>
+        <p style="text-align:center;margin:30px 0">
+          <a href="${verifyUrl}" style="background:#6366f1;color:#fff;padding:14px 32px;border-radius:10px;text-decoration:none;font-weight:700;font-size:16px">
+            Confirmar mi email
+          </a>
+        </p>
+        <p style="color:#888;font-size:14px">El enlace es válido durante 24 horas.</p>
+        <p style="color:#888;font-size:14px">Si no creaste esta cuenta en Coter Pro, ignora este mensaje.</p>
+      </div>`,
+    });
+    logger.info('Email de verificación enviado', { email });
+    return true;
+  } catch (err) {
+    logger.error('Error enviando email de verificación', { error: err.message, email });
+    return false;
+  }
+}
+
+/**
+ * Genera un token de verificación, lo guarda en BD (hash sha256) y
+ * devuelve el token raw para incluirlo en el email.
+ * Invalida cualquier token anterior del mismo terapeuta.
+ *
+ * @param {Object} pool
+ * @param {string} therapistId
+ * @returns {Promise<string>} token raw (64 chars hex)
+ */
+async function createVerificationToken(pool, therapistId) {
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 24 * 3600000); // 24 horas
+
+  // Invalidar tokens anteriores para este terapeuta (solo puede haber uno activo)
+  await pool.query(
+    'UPDATE email_verifications SET used = TRUE WHERE therapist_id = $1 AND used = FALSE',
+    [therapistId]
+  );
+
+  await pool.query(
+    `INSERT INTO email_verifications (id, therapist_id, token, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [uuidv4(), therapistId, tokenHash, expiresAt]
+  );
+
+  return rawToken;
 }
 
 const router = express.Router();
@@ -188,21 +269,37 @@ router.post('/register', [
       [id, name, email, hash, specialty]
     );
 
-    const token = jwt.sign({ id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
-    const refreshToken = await createRefreshToken(pool, id);
-
-    // Crear suscripción en trial (14 días)
+    // Crear suscripción en trial
     await createTrialSubscription(pool, id);
 
-    // Crear Stripe customer (async, no bloquea la respuesta)
+    // Crear Stripe customer (async, no bloquea)
     createStripeCustomer(pool, id, email, name).catch(err => {
       logger.error('Error creando Stripe customer en registro', { error: err.message, id });
     });
 
-    logger.info('Terapeuta registrado', { id, email });
+    logger.info('Terapeuta registrado — pendiente verificación de email', { id, email });
     audit({ who: id, role: 'therapist', action: 'register', resource: 'therapist', resourceId: id, ip: req.ip, metadata: { email, name, specialty } });
-    setTherapistCookies(res, token, refreshToken);
-    res.json({ success: true, therapist: { id, name, email, specialty }, token, refresh_token: refreshToken });
+
+    // ── Verificación de email ──────────────────────────────────
+    // No se emiten tokens hasta que el email esté verificado.
+    // El cliente debe redirigir al usuario a la página de "revisa tu correo".
+    const rawToken = await createVerificationToken(pool, id);
+    const emailSent = await sendVerificationEmail(email, name, rawToken);
+
+    const response = {
+      success: true,
+      requires_verification: true,
+      message: 'Cuenta creada. Revisa tu correo para confirmar tu email.',
+    };
+
+    // En desarrollo sin SMTP, devolvemos la URL de verificación en la respuesta
+    // para que se pueda probar el flujo sin necesidad de buzón real.
+    if (!config.isSecureDeployment && !emailSent) {
+      response.verification_url = getVerificationUrl(rawToken);
+      logger.info('SMTP no configurado: URL de verificación disponible en la respuesta de desarrollo');
+    }
+
+    res.json(response);
   } catch (err) {
     logger.error('Error en registro', { error: err.message });
     res.status(500).json({ success: false, error: 'Error del servidor' });
@@ -229,18 +326,114 @@ router.post('/login', [
       return res.json({ success: false, error: 'Credenciales invalidas' });
     }
 
+    // ── 2FA: si está activada, NO emitir tokens todavía ──
+    // El cliente recibe un JWT de un solo propósito (5 min) que solo sirve
+    // para el segundo paso (POST /verify-2fa). Así la contraseña sola nunca
+    // concede acceso a una cuenta con doble verificación.
+    if (therapist.two_factor_enabled) {
+      const twoFactorToken = jwt.sign({ id: therapist.id, purpose: '2fa' }, config.JWT_SECRET, { expiresIn: '5m' });
+      audit({ who: therapist.id, role: 'therapist', action: 'login_pending_2fa', resource: 'therapist', resourceId: therapist.id, ip: req.ip });
+      return res.json({
+        success: true,
+        requires_2fa: true,
+        two_factor_token: twoFactorToken,
+        therapist: { id: therapist.id, name: therapist.name, email: therapist.email, specialty: therapist.specialty, two_factor_enabled: true },
+      });
+    }
+
     const token = jwt.sign({ id: therapist.id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
     const refreshToken = await createRefreshToken(pool, therapist.id);
     audit({ who: therapist.id, role: 'therapist', action: 'login', resource: 'therapist', resourceId: therapist.id, ip: req.ip });
     setTherapistCookies(res, token, refreshToken);
     res.json({
       success: true,
-      therapist: { id: therapist.id, name: therapist.name, email: therapist.email, specialty: therapist.specialty },
+      therapist: { id: therapist.id, name: therapist.name, email: therapist.email, specialty: therapist.specialty, two_factor_enabled: false },
       token,
       refresh_token: refreshToken,
     });
   } catch (err) {
     logger.error('Error en login', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor' });
+  }
+});
+
+// ─── VERIFICACIÓN 2FA (segundo paso del login) ────────────────
+// Intercambia el two_factor_token (emitido por /login) + código TOTP o
+// código de respaldo por los tokens de sesión normales.
+router.post('/verify-2fa', [
+  body('two_factor_token').notEmpty(),
+  body('code').notEmpty(),
+], validate, async (req, res) => {
+  try {
+    const { two_factor_token, code } = req.body;
+
+    let payload;
+    try {
+      payload = jwt.verify(two_factor_token, config.JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ success: false, error: 'Sesión de verificación expirada. Inicia sesión de nuevo.' });
+    }
+    if (!payload || payload.purpose !== '2fa' || !payload.id) {
+      return res.status(401).json({ success: false, error: 'Token de verificación inválido' });
+    }
+
+    const pool = getPool();
+    const { rows } = await pool.query(
+      'SELECT id, email, name, specialty, two_factor_secret, two_factor_enabled FROM therapists WHERE id = $1',
+      [payload.id]
+    );
+    if (rows.length === 0) return res.status(401).json({ success: false, error: 'Cuenta no encontrada' });
+    const therapist = rows[0];
+
+    // Fail-closed: si la cuenta dice 2FA activa pero el secreto no está,
+    // nunca conceder acceso por la contraseña sola.
+    if (!therapist.two_factor_enabled || !therapist.two_factor_secret) {
+      return res.status(401).json({ success: false, error: 'La verificación en dos pasos no está activa' });
+    }
+
+    const secret = decrypt(therapist.two_factor_secret);
+    let method = null;
+
+    // 1) TOTP de 6 dígitos
+    if (verifyTotp(secret, code)) {
+      method = 'totp';
+    } else {
+      // 2) Código de respaldo (16 chars, de un solo uso)
+      const backupCode = normalizeBackupCode(code);
+      if (backupCode) {
+        const { rows: codes } = await pool.query(
+          'SELECT id, code_hash FROM therapist_2fa_backup_codes WHERE therapist_id = $1 AND used_at IS NULL',
+          [therapist.id]
+        );
+        for (const c of codes) {
+          if (await bcrypt.compare(backupCode, c.code_hash)) {
+            await pool.query('UPDATE therapist_2fa_backup_codes SET used_at = NOW() WHERE id = $1', [c.id]);
+            method = 'backup_code';
+            break;
+          }
+        }
+      }
+    }
+
+    if (!method) {
+      return res.status(401).json({ success: false, error: 'Código inválido' });
+    }
+
+    const token = jwt.sign({ id: therapist.id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
+    const refreshToken = await createRefreshToken(pool, therapist.id);
+    audit({
+      who: therapist.id, role: 'therapist', action: 'login', resource: 'therapist', resourceId: therapist.id, ip: req.ip,
+      metadata: { auth_method: '2fa', factor: method },
+    });
+    setTherapistCookies(res, token, refreshToken);
+    res.json({
+      success: true,
+      therapist: { id: therapist.id, name: therapist.name, email: therapist.email, specialty: therapist.specialty, two_factor_enabled: true },
+      token,
+      refresh_token: refreshToken,
+    });
+  } catch (err) {
+    logger.error('Error en verify-2fa', { error: err.message });
     res.status(500).json({ success: false, error: 'Error del servidor' });
   }
 });
@@ -566,9 +759,12 @@ router.get('/patients/:patientId', authWithBilling, async (req, res) => {
       'SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2',
       [req.user.id, patientId]
     );
+    // El vínculo inactivo conserva el acceso histórico del terapeuta que lo
+    // tuvo asignado; las operaciones activas (mensajes/tareas nuevas) siguen
+    // exigiendo status='active'.
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
 
-    auditAccess(req, 'view_patient', patientId);
+    await auditPatientAccess(req, req.user.id, patientId, 'view_patient');
 
     const { rows: patientRows } = await pool.query('SELECT * FROM patients WHERE id = $1', [patientId]);
     if (patientRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
@@ -634,6 +830,8 @@ router.get('/patients/:patientId/pre-session', authWithBilling, async (req, res)
       [req.user.id, patientId]
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    await auditPatientAccess(req, req.user.id, patientId, 'view_pre_session');
 
     // ── 1. Última nota clínica (proxy de "última sesión") ──────
     const { rows: lastNoteRows } = await pool.query(
@@ -877,6 +1075,9 @@ router.post('/patients/:patientId/messages', authWithBilling, async (req, res) =
     if (!message || !message.trim()) return res.status(400).json({ success: false, error: 'Mensaje requerido' });
 
     const pool = getPool();
+    if (!(await therapistOwnsActivePatient(pool, req.user.id, patientId))) {
+      return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+    }
     const msgId = uuidv4();
     const encryptedMsg = encrypt(message.trim());
 
@@ -886,6 +1087,7 @@ router.post('/patients/:patientId/messages', authWithBilling, async (req, res) =
     );
 
     const preview = message.trim().length > 80 ? message.trim().substring(0, 80) + '...' : message.trim();
+    const genericMessageNotice = 'Abre Coter Pro para leerlo de forma segura.';
     // createNotification ahora es awaitable: el INSERT y el bus.publish
     // se confirman antes de que el terapeuta reciba el res.json. Antes era
     // fire-and-forget y el test que cuenta notifications del paciente justo
@@ -907,9 +1109,11 @@ router.post('/patients/:patientId/messages', authWithBilling, async (req, res) =
     });
 
     // Push notification nativa (FCM) — best-effort, no bloquea la respuesta
+    // No incluir contenido clínico en push/lock screen. El mensaje real solo
+    // viaja por el canal autenticado de la app.
     fcm.sendToPatient(patientId, {
       title: 'Nuevo mensaje de tu terapeuta',
-      body: preview,
+      body: genericMessageNotice,
     }).catch(err => logger.warn('[Push] Error enviando push de mensaje', { error: err.message, patientId }));
 
     res.json({ success: true, message_id: msgId });
@@ -992,6 +1196,9 @@ router.post('/patients/:patientId/assignments', authWithBilling, async (req, res
     auditChange(req, 'create_assignment', 'assignment', assignId, { patientId, type, title, exercise_kind });
 
     const dueMsg = due_date ? ' (vence: ' + new Date(due_date).toLocaleDateString('es-ES') + ')' : '';
+    const genericAssignmentNotice = due_date
+      ? 'Tienes una nueva tarea con fecha de vencimiento.'
+      : 'Tienes una nueva tarea pendiente.';
     // await: ver comentario en POST /patients/:id/messages arriba. La unica
     // diferencia entre rutas aca es que assignment crea ademas un
     // bus.publish('task:assigned'); ambos quedan ahora garantizados en orden
@@ -1003,9 +1210,11 @@ router.post('/patients/:patientId/assignments', authWithBilling, async (req, res
     });
 
     // Push notification nativa (FCM)
+    // El titulo/instrucciones de la tarea pueden contener PHI; mantener el
+    // push generico y mostrar detalle solo dentro de la app autenticada.
     fcm.sendToPatient(patientId, {
       title: 'Nueva tarea asignada',
-      body: '"' + title + '"' + dueMsg,
+      body: genericAssignmentNotice,
     }).catch(err => logger.warn('[Push] Error push de tarea', { error: err.message, patientId }));
 
     res.json({ success: true, assignment_id: assignId });
@@ -1021,10 +1230,14 @@ router.put('/patients/:patientId/assignments/:assignmentId', authWithBilling, as
     const { completed } = req.body;
     if (!completed) return res.status(400).json({ success: false, error: 'Faltan datos' });
 
-    await getPool().query(
-      "UPDATE assignments SET status = 'completed', completed_at = NOW() WHERE id = $1 AND patient_id = $2",
-      [assignmentId, patientId]
+    const pool = getPool();
+    const result = await pool.query(
+      "UPDATE assignments a SET status = 'completed', completed_at = NOW() WHERE a.id = $1 AND a.patient_id = $2 AND a.therapist_id = $3 AND a.status = 'assigned'",
+      [assignmentId, patientId, req.user.id]
     );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, error: 'Tarea no encontrada' });
+    }
     res.json({ success: true, message: 'Tarea completada' });
   } catch (err) {
     logger.error('Error completando tarea', { error: err.message });
@@ -1040,6 +1253,9 @@ router.post('/patients/:patientId/goals', authWithBilling, async (req, res) => {
     if (!title || !metric || !target_value || !duration_days) return res.status(400).json({ success: false, error: 'Faltan datos' });
 
     const pool = getPool();
+    if (!(await therapistOwnsActivePatient(pool, req.user.id, patientId))) {
+      return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+    }
     const goalId = uuidv4();
     await pool.query(
       'INSERT INTO goals (id, patient_id, title, metric, target_value, duration_days) VALUES ($1, $2, $3, $4, $5, $6)',
@@ -1064,10 +1280,14 @@ router.put('/patients/:patientId/goals/:goalId', authWithBilling, async (req, re
     const { patientId, goalId } = req.params;
     const { current_value, status } = req.body;
     const pool = getPool();
+    if (!(await therapistOwnsActivePatient(pool, req.user.id, patientId))) {
+      return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+    }
 
     if (current_value !== undefined) {
-      await pool.query('UPDATE goals SET current_value = $1 WHERE id = $2 AND patient_id = $3', [current_value, goalId, patientId]);
-      const { rows: goalRows } = await pool.query('SELECT title, target_value FROM goals WHERE id = $1', [goalId]);
+      const updateResult = await pool.query('UPDATE goals SET current_value = $1 WHERE id = $2 AND patient_id = $3 AND EXISTS (SELECT 1 FROM therapist_patients tp WHERE tp.therapist_id = $4 AND tp.patient_id = $3 AND tp.status = \'active\')', [current_value, goalId, patientId, req.user.id]);
+      if (updateResult.rowCount === 0) return res.status(404).json({ success: false, error: 'Objetivo no encontrado' });
+      const { rows: goalRows } = await pool.query('SELECT title, target_value FROM goals WHERE id = $1 AND patient_id = $2', [goalId, patientId]);
       if (goalRows.length > 0) {
         const goal = goalRows[0];
         const pct = Math.round((current_value / goal.target_value) * 100);
@@ -1081,9 +1301,10 @@ router.put('/patients/:patientId/goals/:goalId', authWithBilling, async (req, re
         await createNotification(pool, patientId, 'goal', 'Actualizacion de objetivo', '"' + goal.title + '" - ' + msg, goalId);
       }
     } else if (status) {
-      await pool.query('UPDATE goals SET status = $1 WHERE id = $2 AND patient_id = $3', [status, goalId, patientId]);
+      const updateResult = await pool.query('UPDATE goals SET status = $1 WHERE id = $2 AND patient_id = $3 AND EXISTS (SELECT 1 FROM therapist_patients tp WHERE tp.therapist_id = $4 AND tp.patient_id = $3 AND tp.status = \'active\')', [status, goalId, patientId, req.user.id]);
+      if (updateResult.rowCount === 0) return res.status(404).json({ success: false, error: 'Objetivo no encontrado' });
       if (status === 'completed') {
-        const { rows: goalRows } = await pool.query('SELECT title FROM goals WHERE id = $1', [goalId]);
+        const { rows: goalRows } = await pool.query('SELECT title FROM goals WHERE id = $1 AND patient_id = $2', [goalId, patientId]);
         if (goalRows.length > 0) {
           // await: ver comentario en POST /patients/:id/messages.
           await createNotification(pool, patientId, 'goal', 'Objetivo completado', 'Felicidades! Alcanzaste "' + goalRows[0].title + '"', goalId);
@@ -1151,7 +1372,7 @@ router.get('/patients/:patientId/clinical-sessions/:sessionId', authWithBilling,
       [sessionId, patientId, req.user.id]
     );
     if (rows.length === 0) return res.status(404).json({ success: false, error: 'Sesión no encontrada' });
-    res.json({ success: true, session: rows[0] });
+    res.json({ success: true, session: decryptClinicalSessions(rows)[0] });
   } catch (err) {
     logger.error('Error cargando sesión', { error: err.message });
     res.status(500).json({ success: false });
@@ -1169,11 +1390,13 @@ router.get('/patients/:patientId/clinical-notes', authWithBilling, async (req, r
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
 
+    await auditPatientAccess(req, req.user.id, patientId, 'view_notes');
+
     const { rows: notes } = await pool.query(
       'SELECT * FROM clinical_notes WHERE patient_id = $1 AND therapist_id = $2 ORDER BY created_at DESC',
       [patientId, req.user.id]
     );
-    res.json({ success: true, notes });
+    res.json({ success: true, notes: decryptClinicalNotes(notes) });
   } catch (err) {
     logger.error('Error cargando notas', { error: err.message });
     res.status(500).json({ success: false });
@@ -1197,7 +1420,16 @@ router.post('/patients/:patientId/clinical-notes', authWithBilling, async (req, 
     const id = uuidv4();
     await pool.query(
       'INSERT INTO clinical_notes (id, patient_id, therapist_id, subjective, objective, assessment, plan, session_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-      [id, patientId, req.user.id, subjective || null, objective || null, assessment || null, plan || null, session_id || null]
+      [
+        id,
+        patientId,
+        req.user.id,
+        subjective ? encrypt(subjective) : null,
+        objective ? encrypt(objective) : null,
+        assessment ? encrypt(assessment) : null,
+        plan ? encrypt(plan) : null,
+        session_id || null,
+      ]
     );
     const { rows: noteRows } = await pool.query('SELECT * FROM clinical_notes WHERE id = $1', [id]);
     auditChange(req, 'create_clinical_note', 'clinical_note', id, { patientId });
@@ -1208,7 +1440,7 @@ router.post('/patients/:patientId/clinical-notes', authWithBilling, async (req, 
     // pestañas (e.g. un modal abierto mostrando notas).
     bus.publish(bus.topicFor('therapist', req.user.id), 'note:created', { patientId, noteId: id });
 
-    res.json({ success: true, note: noteRows[0] });
+    res.json({ success: true, note: decryptClinicalNotes(noteRows)[0] });
   } catch (err) {
     logger.error('Error creando nota', { error: err.message });
     res.status(500).json({ success: false });
@@ -1228,10 +1460,10 @@ router.put('/patients/:patientId/clinical-notes/:noteId', authWithBilling, async
 
     const note = noteRows[0];
     const fields = {
-      subjective: subjective !== undefined ? (subjective || null) : note.subjective,
-      objective: objective !== undefined ? (objective || null) : note.objective,
-      assessment: assessment !== undefined ? (assessment || null) : note.assessment,
-      plan: plan !== undefined ? (plan || null) : note.plan,
+      subjective: subjective !== undefined ? (subjective ? encrypt(subjective) : null) : note.subjective,
+      objective: objective !== undefined ? (objective ? encrypt(objective) : null) : note.objective,
+      assessment: assessment !== undefined ? (assessment ? encrypt(assessment) : null) : note.assessment,
+      plan: plan !== undefined ? (plan ? encrypt(plan) : null) : note.plan,
       session_id: session_id !== undefined ? (session_id || null) : note.session_id,
     };
     await pool.query(
@@ -1239,7 +1471,7 @@ router.put('/patients/:patientId/clinical-notes/:noteId', authWithBilling, async
       [fields.subjective, fields.objective, fields.assessment, fields.plan, fields.session_id, noteId, req.user.id]
     );
     auditChange(req, 'update_clinical_note', 'clinical_note', noteId, { patientId });
-    res.json({ success: true, note: { ...note, ...fields, updated_at: new Date().toISOString() } });
+    res.json({ success: true, note: decryptClinicalNotes([{ ...note, ...fields, updated_at: new Date().toISOString() }])[0] });
   } catch (err) {
     logger.error('Error actualizando nota', { error: err.message });
     res.status(500).json({ success: false });
@@ -1501,6 +1733,8 @@ router.get('/patients/:patientId/scale-history', authWithBilling, async (req, re
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
 
+    await auditPatientAccess(req, req.user.id, patientId, 'view_scale_history');
+
     if (!kind || !SCALE_KINDS.includes(kind)) {
       // Devolver historial de todas las escalas
       const results = {};
@@ -1572,6 +1806,8 @@ router.get('/patients/:patientId/weekly-insights', authWithBilling, async (req, 
       [req.user.id, patientId]
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    await auditPatientAccess(req, req.user.id, patientId, 'view_insights');
 
     const patientName = connRows[0].patient_name || 'Paciente';
 
@@ -1723,10 +1959,12 @@ router.get('/export/:patientId', authWithBilling, async (req, res) => {
     const { patientId } = req.params;
     const pool = getPool();
     const { rows: connRows } = await pool.query(
-      'SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2',
+      "SELECT * FROM therapist_patients WHERE therapist_id = $1 AND patient_id = $2 AND status = 'active'",
       [req.user.id, patientId]
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
+
+    await auditPatientAccess(req, req.user.id, patientId, 'export_patient_data');
 
     const { rows: patientRows } = await pool.query('SELECT * FROM patients WHERE id = $1', [patientId]);
     const { rows: checkIns } = await pool.query('SELECT * FROM check_ins WHERE patient_id = $1 ORDER BY created_at ASC', [patientId]);
@@ -1740,10 +1978,12 @@ router.get('/export/:patientId', authWithBilling, async (req, res) => {
     const decryptedCheckIns = decryptCheckIns(checkIns);
     const decryptedMessages = decryptMessages(messages);
     const decryptedAssignments = decryptAssignments(assignments);
+    const decryptedNotes = decryptClinicalNotes(notes);
+    const decryptedSessions = decryptClinicalSessions(sessions);
     const patient = patientRows[0];
 
     if (format === 'csv') {
-      const csv = generateCSV(patient, decryptedCheckIns, decryptedMessages, decryptedAssignments, goals, notes, sessions);
+      const csv = generateCSV(patient, decryptedCheckIns, decryptedMessages, decryptedAssignments, goals, decryptedNotes, decryptedSessions);
       auditChange(req, 'export_patient_data', 'patient', patientId, { format: 'csv' });
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename=coter_' + patientId.slice(0, 8) + '.csv');
@@ -1751,7 +1991,7 @@ router.get('/export/:patientId', authWithBilling, async (req, res) => {
     }
 
     if (format === 'pdf' || format === 'html') {
-      const html = generateHTMLReport(patient, decryptedCheckIns, decryptedMessages, decryptedAssignments, goals, notes, sessions);
+      const html = generateHTMLReport(patient, decryptedCheckIns, decryptedMessages, decryptedAssignments, goals, decryptedNotes, decryptedSessions);
       auditChange(req, 'export_patient_data', 'patient', patientId, { format });
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Disposition', 'inline; filename=historial_' + (patient.name || patientId.slice(0, 8)).replace(/\s+/g, '_') + '.html');
@@ -1759,10 +1999,144 @@ router.get('/export/:patientId', authWithBilling, async (req, res) => {
     }
 
     auditChange(req, 'export_patient_data', 'patient', patientId, { format: 'json' });
-    res.json({ export_date: new Date().toISOString(), patient, check_ins: decryptedCheckIns, messages: decryptedMessages, assignments: decryptedAssignments, goals, notes, sessions });
+    res.json({ export_date: new Date().toISOString(), patient, check_ins: decryptedCheckIns, messages: decryptedMessages, assignments: decryptedAssignments, goals, notes: decryptedNotes, sessions: decryptedSessions });
   } catch (err) {
     logger.error('Error exportando', { error: err.message });
     res.status(500).json({ success: false });
+  }
+});
+
+// ─── VERIFICACIÓN DE EMAIL ────────────────────────────────────
+// GET /verify-email?token=<raw>
+// Verifica el token, marca email_verified_at, emite JWT y cookies.
+router.get('/verify-email', [
+  query('token').notEmpty().withMessage('Token requerido'),
+], validate, async (req, res) => {
+  try {
+    const { token } = req.query;
+    const pool = getPool();
+
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    const { rows } = await pool.query(
+      `SELECT ev.therapist_id, t.name, t.email, t.specialty, t.email_verified_at
+       FROM email_verifications ev
+       JOIN therapists t ON t.id = ev.therapist_id
+       WHERE ev.token = $1
+         AND ev.used = FALSE
+         AND ev.expires_at > NOW()`,
+      [tokenHash]
+    );
+
+    if (rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'El enlace de verificación no es válido o ha expirado.',
+        code: 'INVALID_VERIFICATION_TOKEN',
+      });
+    }
+
+    const { therapist_id, name, email, specialty, email_verified_at } = rows[0];
+
+    // Marcar token como usado y la cuenta como verificada (transacción)
+    await pool.query('BEGIN');
+    try {
+      await pool.query(
+        'UPDATE email_verifications SET used = TRUE WHERE token = $1',
+        [tokenHash]
+      );
+      // Solo actualizar si no estaba ya verificado (reenvío doble-clic)
+      if (!email_verified_at) {
+        await pool.query(
+          'UPDATE therapists SET email_verified_at = NOW(), updated_at = NOW() WHERE id = $1',
+          [therapist_id]
+        );
+      }
+      await pool.query('COMMIT');
+    } catch (err) {
+      await pool.query('ROLLBACK');
+      throw err;
+    }
+
+    audit({
+      who: therapist_id,
+      role: 'therapist',
+      action: 'email_verified',
+      resource: 'therapist',
+      resourceId: therapist_id,
+      ip: req.ip,
+      metadata: { email },
+    });
+
+    // Emitir tokens de sesión ahora que el email está verificado
+    const accessToken = jwt.sign({ id: therapist_id }, config.JWT_SECRET, { expiresIn: config.JWT_EXPIRES_IN });
+    const refreshToken = await createRefreshToken(pool, therapist_id);
+    setTherapistCookies(res, accessToken, refreshToken);
+
+    logger.info('Email verificado — sesión iniciada', { therapistId: therapist_id, email });
+
+    res.json({
+      success: true,
+      message: 'Email verificado correctamente.',
+      therapist: { id: therapist_id, name, email, specialty },
+      token: accessToken,
+      refresh_token: refreshToken,
+    });
+  } catch (err) {
+    logger.error('Error en verificación de email', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error al verificar el email.' });
+  }
+});
+
+// ─── REENVÍO DE VERIFICACIÓN ──────────────────────────────────
+// GET /resend-verification?email=<email>
+// Reenvía el email si la cuenta existe y no está verificada todavía.
+// Responde siempre con success:true para no revelar si el email existe.
+router.get('/resend-verification', [
+  query('email').isEmail().normalizeEmail().withMessage('Email válido requerido'),
+], validate, async (req, res) => {
+  try {
+    const { email } = req.query;
+    const pool = getPool();
+
+    const { rows } = await pool.query(
+      'SELECT id, name, email_verified_at FROM therapists WHERE email = $1',
+      [email]
+    );
+
+    // Respuesta uniforme: no revelar si el email existe o no
+    const okResponse = {
+      success: true,
+      message: 'Si la cuenta existe y no está verificada, recibirás un nuevo enlace.',
+    };
+
+    if (rows.length === 0 || rows[0].email_verified_at !== null) {
+      return res.json(okResponse);
+    }
+
+    const { id, name } = rows[0];
+    const rawToken = await createVerificationToken(pool, id);
+    const emailSent = await sendVerificationEmail(email, name, rawToken);
+
+    audit({
+      who: id,
+      role: 'therapist',
+      action: 'email_verification_resent',
+      resource: 'therapist',
+      resourceId: id,
+      ip: req.ip,
+      metadata: { email },
+    });
+
+    const response = { ...okResponse };
+    if (!config.isSecureDeployment && !emailSent) {
+      response.verification_url = getVerificationUrl(rawToken);
+    }
+
+    res.json(response);
+  } catch (err) {
+    logger.error('Error en reenvío de verificación', { error: err.message });
+    res.json({ success: true, message: 'Si la cuenta existe y no está verificada, recibirás un nuevo enlace.' });
   }
 });
 
@@ -1777,26 +2151,29 @@ router.post('/password-recovery', [
     if (rows.length === 0) return res.json({ success: true, message: 'Si el email existe, recibiras instrucciones' });
 
     const therapist = rows[0];
-    const resetToken = uuidv4();
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+
     await pool.query(
       'INSERT INTO password_resets (id, therapist_id, token, expires_at) VALUES ($1, $2, $3, $4)',
-      [uuidv4(), therapist.id, resetToken, new Date(Date.now() + 3600000).toISOString()]
+      [uuidv4(), therapist.id, resetTokenHash, new Date(Date.now() + 3600000).toISOString()]
     );
 
     // Enviar email de recuperación
     const resetUrl = config.APP_URL + '/reset-password?token=' + resetToken;
     const emailSent = await sendRecoveryEmail(email, therapist.name, resetToken, resetUrl);
 
-    if (!config.isProd && !emailSent) {
-      logger.info('Password reset token para ' + email + ': ' + resetToken);
-      logger.info('URL: ' + resetUrl);
+    // Nunca escribir tokens o URLs de recuperación en logs. En desarrollo,
+    // el enlace se devuelve explícitamente en la respuesta para pruebas locales.
+    if (!config.isSecureDeployment && !emailSent) {
+      logger.info('SMTP no configurado: enlace de recuperación disponible solo en la respuesta de desarrollo');
     }
 
     // En desarrollo, si el email no se envió (SMTP no configurado),
     // devolvemos el reset_url en la respuesta para que el frontend
     // pueda mostrarlo como enlace directo al terapeuta.
     const response = { success: true, message: 'Si el email existe, recibiras instrucciones' };
-    if (!config.isProd && !emailSent) {
+    if (!config.isSecureDeployment && !emailSent) {
       response.reset_url = resetUrl;
     }
     res.json(response);
@@ -1813,9 +2190,10 @@ router.post('/reset-password', [
   try {
     const { token, new_password } = req.body;
     const pool = getPool();
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
     const { rows: resetRows } = await pool.query(
       "SELECT * FROM password_resets WHERE token = $1 AND used = FALSE AND expires_at > NOW()",
-      [token]
+      [tokenHash]
     );
     if (resetRows.length === 0) return res.json({ success: false, error: 'Token invalido o expirado' });
 
@@ -2029,6 +2407,8 @@ router.get('/patients/:patientId/clinical-sessions', authWithBilling, async (req
     );
     if (connRows.length === 0) return res.status(404).json({ success: false, error: 'Paciente no encontrado' });
 
+    await auditPatientAccess(req, req.user.id, patientId, 'view_sessions');
+
     const { rows: sessions } = await pool.query(
       `SELECT s.*,
         (SELECT json_agg(json_build_object(
@@ -2043,7 +2423,7 @@ router.get('/patients/:patientId/clinical-sessions', authWithBilling, async (req
       [patientId, req.user.id]
     );
 
-    res.json({ success: true, sessions: sessions.map(s => ({ ...s, notes: s.notes || [] })) });
+    res.json({ success: true, sessions: decryptClinicalSessions(sessions.map(s => ({ ...s, notes: s.notes || [] }))) });
   } catch (err) {
     logger.error('Error cargando sesiones clínicas', { error: err.message });
     res.status(500).json({ success: false });
@@ -2072,7 +2452,7 @@ router.post('/patients/:patientId/clinical-sessions', authWithBilling, async (re
         duration_min || null,
         type || 'presencial',
         status || 'completed',
-        notes_summary || null,
+        notes_summary ? encrypt(notes_summary) : null,
       ]
     );
 
@@ -2081,7 +2461,7 @@ router.post('/patients/:patientId/clinical-sessions', authWithBilling, async (re
 
     bus.publish(bus.topicFor('therapist', req.user.id), 'session:created', { patientId, sessionId: id });
 
-    res.json({ success: true, session: sessionRows[0] });
+    res.json({ success: true, session: decryptClinicalSessions(sessionRows)[0] });
   } catch (err) {
     logger.error('Error creando sesión clínica', { error: err.message });
     res.status(500).json({ success: false });
@@ -2106,7 +2486,7 @@ router.put('/patients/:patientId/clinical-sessions/:sessionId', authWithBilling,
       duration_min: duration_min !== undefined ? duration_min : sess.duration_min,
       type: type !== undefined ? type : sess.type,
       status: status !== undefined ? status : sess.status,
-      notes_summary: notes_summary !== undefined ? notes_summary : sess.notes_summary,
+      notes_summary: notes_summary !== undefined ? (notes_summary ? encrypt(notes_summary) : null) : sess.notes_summary,
     };
 
     await pool.query(
@@ -2116,7 +2496,7 @@ router.put('/patients/:patientId/clinical-sessions/:sessionId', authWithBilling,
     );
 
     auditChange(req, 'update_clinical_session', 'clinical_session', sessionId, { patientId });
-    res.json({ success: true, session: { ...sess, ...fields, updated_at: new Date().toISOString() } });
+    res.json({ success: true, session: decryptClinicalSessions([{ ...sess, ...fields, updated_at: new Date().toISOString() }])[0] });
   } catch (err) {
     logger.error('Error actualizando sesión clínica', { error: err.message });
     res.status(500).json({ success: false });
@@ -2168,6 +2548,126 @@ router.post('/push-token', authWithBilling, async (req, res) => {
   } catch (err) {
     logger.error('[Push] Error registrando token FCM de terapeuta', { error: err.message });
     res.status(500).json({ error: 'Error al registrar token' });
+  }
+});
+
+// ─── 2FA: gestión de la verificación en dos pasos ─────────────
+// Usan authenticateToken (no authWithBilling) a propósito: la seguridad
+// no debe depender del estado de la suscripción.
+
+router.get('/2fa/status', authenticateToken, async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rows } = await pool.query('SELECT two_factor_enabled FROM therapists WHERE id = $1', [req.user.id]);
+    res.json({ success: true, enabled: rows.length > 0 && rows[0].two_factor_enabled });
+  } catch (err) {
+    logger.error('Error en 2fa/status', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor' });
+  }
+});
+
+router.post('/2fa/setup', authenticateToken, async (req, res) => {
+  try {
+    const pool = getPool();
+    const { rows } = await pool.query('SELECT email, two_factor_enabled FROM therapists WHERE id = $1', [req.user.id]);
+    if (rows.length === 0) return res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+    if (rows[0].two_factor_enabled) {
+      return res.status(409).json({ success: false, error: 'La verificación en dos pasos ya está activa. Desactívala antes de reconfigurarla.' });
+    }
+
+    const secret = generateSecret();
+    const otpauth = otpauthUrl(secret, rows[0].email, 'Coter Pro');
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauth, { width: 240, margin: 1, errorCorrectionLevel: 'M' });
+
+    await pool.query(
+      'UPDATE therapists SET two_factor_secret = $1, two_factor_enabled = FALSE, two_factor_confirmed_at = NULL WHERE id = $2',
+      [encrypt(secret), req.user.id]
+    );
+    await pool.query('DELETE FROM therapist_2fa_backup_codes WHERE therapist_id = $1', [req.user.id]);
+    audit({ who: req.user.id, role: 'therapist', action: '2fa_setup_started', resource: 'therapist', resourceId: req.user.id, ip: req.ip });
+    res.json({ success: true, secret, otpauth_url: otpauth, qr_code_data_url: qrCodeDataUrl });
+  } catch (err) {
+    logger.error('Error en 2fa/setup', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor' });
+  }
+});
+
+router.post('/2fa/confirm', authenticateToken, [
+  body('code').notEmpty(),
+], validate, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const pool = getPool();
+    const { rows } = await pool.query('SELECT two_factor_secret, two_factor_enabled FROM therapists WHERE id = $1', [req.user.id]);
+    if (rows.length === 0) return res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+    const row = rows[0];
+    if (row.two_factor_enabled) return res.status(409).json({ success: false, error: 'La verificación en dos pasos ya está activa' });
+    if (!row.two_factor_secret) return res.status(400).json({ success: false, error: 'Primero genera un secreto con /2fa/setup' });
+
+    const secret = decrypt(row.two_factor_secret);
+    if (!verifyTotp(secret, code)) {
+      return res.status(401).json({ success: false, error: 'Código inválido. Comprueba el código actual de tu app autenticadora.' });
+    }
+
+    // Códigos de respaldo: se muestran una sola vez, se guardan como hash bcrypt
+    const backupCodes = generateBackupCodes(10);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM therapist_2fa_backup_codes WHERE therapist_id = $1', [req.user.id]);
+      for (const c of backupCodes) {
+        const hash = await bcrypt.hash(c, 10);
+        await client.query(
+          'INSERT INTO therapist_2fa_backup_codes (id, therapist_id, code_hash) VALUES ($1, $2, $3)',
+          [uuidv4(), req.user.id, hash]
+        );
+      }
+      await client.query(
+        'UPDATE therapists SET two_factor_enabled = TRUE, two_factor_confirmed_at = NOW() WHERE id = $1',
+        [req.user.id]
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    audit({ who: req.user.id, role: 'therapist', action: '2fa_enabled', resource: 'therapist', resourceId: req.user.id, ip: req.ip });
+    res.json({ success: true, backup_codes: backupCodes });
+  } catch (err) {
+    logger.error('Error en 2fa/confirm', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor' });
+  }
+});
+
+router.post('/2fa/disable', authenticateToken, [
+  body('code').notEmpty(),
+], validate, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const pool = getPool();
+    const { rows } = await pool.query('SELECT two_factor_secret, two_factor_enabled FROM therapists WHERE id = $1', [req.user.id]);
+    if (rows.length === 0) return res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+    if (!rows[0].two_factor_enabled) return res.status(400).json({ success: false, error: 'La verificación en dos pasos no está activa' });
+    if (!rows[0].two_factor_secret) return res.status(400).json({ success: false, error: 'No hay secreto configurado' });
+
+    const secret = decrypt(rows[0].two_factor_secret);
+    if (!verifyTotp(secret, code)) {
+      return res.status(401).json({ success: false, error: 'Código inválido' });
+    }
+
+    await pool.query(
+      'UPDATE therapists SET two_factor_secret = NULL, two_factor_enabled = FALSE, two_factor_confirmed_at = NULL WHERE id = $1',
+      [req.user.id]
+    );
+    await pool.query('DELETE FROM therapist_2fa_backup_codes WHERE therapist_id = $1', [req.user.id]);
+    audit({ who: req.user.id, role: 'therapist', action: '2fa_disabled', resource: 'therapist', resourceId: req.user.id, ip: req.ip });
+    res.json({ success: true, message: 'Verificación en dos pasos desactivada' });
+  } catch (err) {
+    logger.error('Error en 2fa/disable', { error: err.message });
+    res.status(500).json({ success: false, error: 'Error del servidor' });
   }
 });
 
