@@ -1,10 +1,11 @@
 // Tests de integración — Auditoría de acceso a fichas clínicas
 // Ejecutar: npm run test:integration (requiere PostgreSQL de test)
 
+require('../scripts/test-db-safety').prepareTestDatabase();
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
-const request = require('supertest');
+const request = require('./helpers/request');
 const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
 
@@ -24,7 +25,7 @@ async function setupTherapistAndPatient() {
     .post('/api/v1/therapists/register')
     .send({ name: 'Terapeuta Auditoría', email, specialty: 'psicologia', password: '123456' });
   expect(reg.statusCode).toBe(200);
-  const therapistToken = reg.body.token;
+  const therapistToken = reg.testSession.token;
 
   const codeRes = await request(app)
     .post('/api/v1/therapists/connection-codes')
@@ -124,7 +125,7 @@ describe('Auditoría de acceso a fichas clínicas', () => {
 
     const res = await request(app)
       .get('/api/v1/therapists/patients/' + patientId)
-      .set('Authorization', 'Bearer ' + reg.body.token);
+      .set('Authorization', 'Bearer ' + reg.testSession.token);
     expect(res.statusCode).toBe(404);
 
     const { rows } = await pool.query(

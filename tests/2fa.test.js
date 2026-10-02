@@ -1,10 +1,11 @@
 // Tests de integración — Verificación en dos pasos (2FA TOTP) del terapeuta
 // Ejecutar: npm run test:integration (requiere PostgreSQL de test)
 
+require('../scripts/test-db-safety').prepareTestDatabase();
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
-const request = require('supertest');
+const request = require('./helpers/request');
 const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
 const { totp, generateSecret } = require('../utils/totp');
@@ -24,7 +25,7 @@ async function registerTherapist() {
     .send({ name: 'Terapeuta 2FA', email, specialty: 'psicologia', password: '123456' });
   expect(res.statusCode).toBe(200);
   expect(res.body.success).toBe(true);
-  return { email, password: '123456', token: res.body.token, therapist: res.body.therapist };
+  return { email, password: '123456', token: res.testSession.token, therapist: res.testSession.therapist };
 }
 
 async function login(email, password) {

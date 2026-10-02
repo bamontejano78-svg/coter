@@ -1,10 +1,11 @@
 // Tests de integración — Derechos RGPD del paciente (exportación y borrado)
 // Ejecutar: npm run test:integration (requiere PostgreSQL de test)
 
+require('../scripts/test-db-safety').prepareTestDatabase();
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
-const request = require('supertest');
+const request = require('./helpers/request');
 const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
 
@@ -23,8 +24,8 @@ async function setupTherapistAndPatient() {
     .post('/api/v1/therapists/register')
     .send({ name: 'Terapeuta RGPD', email, specialty: 'psicologia', password: '123456' });
   expect(reg.statusCode).toBe(200);
-  const therapistToken = reg.body.token;
-  const therapistId = reg.body.therapist.id;
+  const therapistToken = reg.testSession.token;
+  const therapistId = reg.testSession.id;
 
   const codeRes = await request(app)
     .post('/api/v1/therapists/connection-codes')

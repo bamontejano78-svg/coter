@@ -1,10 +1,12 @@
 // Tests para Coter Pro
 // Ejecutar: npm test
 
+require('../scripts/test-db-safety').prepareTestDatabase();
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
-const request = require('supertest');
+const request = require('./helpers/request');
+const rawRequest = require('supertest');
 const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
 const bus = require('../utils/eventBus');
@@ -98,14 +100,29 @@ describe('API Health', () => {
 });
 
 describe('Therapist Auth', () => {
-  test('POST /api/v1/therapists/register creates therapist', async () => {
-    const res = await request(app)
+  test('POST /api/v1/therapists/register creates an unverified therapist without a session', async () => {
+    const res = await rawRequest(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Test', email: 'test@coter.com', specialty: 'psicologia', password: '123456' });
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.token).toBeDefined();
-    expect(res.body.therapist.name).toBe('Dr. Test');
+    expect(res.body.requires_verification).toBe(true);
+    expect(res.body.token).toBeUndefined();
+    expect(res.body.therapist).toBeUndefined();
+    expect(res.body.verification_url).toEqual(expect.stringContaining('/verify-email.html?token='));
+
+    const verification = await rawRequest(app)
+      .get('/api/v1/therapists/verify-email')
+      .query({ token: new URL(res.body.verification_url).searchParams.get('token') });
+    expect(verification.statusCode).toBe(200);
+    expect(verification.body.success).toBe(true);
+    expect(verification.body.token).toBeDefined();
+    expect(verification.body.therapist.name).toBe('Dr. Test');
+
+    const reused = await rawRequest(app)
+      .get('/api/v1/therapists/verify-email')
+      .query({ token: new URL(res.body.verification_url).searchParams.get('token') });
+    expect(reused.statusCode).toBe(400);
   });
 
   test('POST /api/v1/therapists/register rejects duplicate email', async () => {
@@ -183,8 +200,8 @@ describe('Patient API', () => {
     const regRes = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dra. Integración', email: 'integracion@coter.com', specialty: 'psicologia_clinica', password: 'test1234' });
-    therapistToken = regRes.body.token;
-    therapistId = regRes.body.therapist.id;
+    therapistToken = regRes.testSession.token;
+    therapistId = regRes.testSession.id;
 
     // 2. Crear código de conexión
     const codeRes = await request(app)
@@ -847,8 +864,8 @@ describe('Therapist Dashboard', () => {
     const regRes = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Dashboard', email: 'dashboard@coter.com', specialty: 'psicologia', password: 'test1234' });
-    therapistToken = regRes.body.token;
-    therapistId = regRes.body.therapist.id;
+    therapistToken = regRes.testSession.token;
+    therapistId = regRes.testSession.id;
 
     // 2. Crear código de conexión
     const codeRes = await request(app)
@@ -896,7 +913,7 @@ describe('Therapist Dashboard', () => {
     const emptyReg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Vacio', email: 'vacio@coter.com', specialty: 'psicologia', password: 'test1234' });
-    const emptyToken = emptyReg.body.token;
+    const emptyToken = emptyReg.testSession.token;
 
     const res = await request(app)
       .get('/api/v1/therapists/dashboard')
@@ -1073,7 +1090,7 @@ describe('GET /api/v1/therapists/patients error handling (regression)', () => {
     const regRes = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. ErrorsTest', email: 'errors@coter.com', specialty: 'psicologia', password: 'test1234' });
-    emptyToken = regRes.body.token;
+    emptyToken = regRes.testSession.token;
   });
 
   test('GET /patients returns 200 success:true with empty patients array when therapist has no patients', async () => {
@@ -1174,8 +1191,8 @@ describe('DELETE /api/v1/therapists/patients/:id/connections (soft disconnect)',
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Disconnect', email: 'disconnect@coter.com', specialty: 'psicologia', password: 'test1234' });
-    tToken = reg.body.token;
-    tId = reg.body.therapist.id;
+    tToken = reg.testSession.token;
+    tId = reg.testSession.id;
 
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')
@@ -1255,7 +1272,7 @@ describe('DELETE /api/v1/therapists/patients/:id/connections (soft disconnect)',
     const otherReg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Extrano', email: 'extrano@coter.com', specialty: 'psi', password: 'test1234' });
-    const otherToken = otherReg.body.token;
+    const otherToken = otherReg.testSession.token;
 
     const res = await request(app)
       .delete('/api/v1/therapists/patients/' + pId + '/connections')
@@ -1345,7 +1362,7 @@ describe('POST /api/v1/therapists/connection-codes error contract (regression)',
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. CodeCreation', email: 'code-create@coter.com', specialty: 'psi', password: 'test1234' });
-    tToken = reg.body.token;
+    tToken = reg.testSession.token;
   });
 
   test('POST without patient_name returns success with ISO expires_at (happy path baseline)', async () => {
@@ -1490,7 +1507,7 @@ describe('EventBus publish contract (SSE hookpoints)', () => {
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Bus', email: 'bus@coter.com', specialty: 'psi', password: 'test1234' });
-    therapistInfo = { id: reg.body.therapist.id, token: reg.body.token };
+    therapistInfo = { id: reg.testSession.id, token: reg.testSession.token };
 
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')
@@ -1798,8 +1815,8 @@ describe('SSE ticket endpoints', () => {
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Ticket', email: 'ticket@coter.com', specialty: 'psi', password: 'test1234' });
-    therapist.id = reg.body.therapist.id;
-    therapist.token = reg.body.token;
+    therapist.id = reg.testSession.id;
+    therapist.token = reg.testSession.token;
 
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')
@@ -1904,7 +1921,7 @@ describe('Migration 007 — Embedded Clinical Exercises seed', () => {
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Migration007', email: 'migration007@coter.com', specialty: 'psi', password: 'test1234' });
-    therapistToken = reg.body.token;
+    therapistToken = reg.testSession.token;
 
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')
@@ -2175,7 +2192,7 @@ describe('Task scheduler (cron batch reminders)', () => {
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Cron', email: 'cron@coter.com', specialty: 'psi', password: 'test1234' });
-    therapist = { id: reg.body.therapist.id, token: reg.body.token };
+    therapist = { id: reg.testSession.id, token: reg.testSession.token };
 
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')
@@ -2361,8 +2378,8 @@ describe('Task scheduler (cron batch reminders)', () => {
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. OnConflict', email: 'onconflict@coter.com', specialty: 'psi', password: 'test1234' });
-    const tToken = reg.body.token;
-    const tId = reg.body.therapist.id;
+    const tToken = reg.testSession.token;
+    const tId = reg.testSession.id;
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')
       .set('Authorization', 'Bearer ' + tToken)
@@ -2553,7 +2570,7 @@ describe('Exercise sessions lifecycle (POST /start, PUT /:sid autosave, POST /:s
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. Sessions', email: 'sessions@coter.com', specialty: 'psi', password: 'test1234' });
-    therapist = { id: reg.body.therapist.id, token: reg.body.token };
+    therapist = { id: reg.testSession.id, token: reg.testSession.token };
 
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')
@@ -3016,12 +3033,12 @@ describe('T6: Therapist view GET /patients/:id enriches assignments with latest_
     const reg = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. T1 TV', email: 'tv1@coter.com', specialty: 'psi', password: 'test1234' });
-    therapist = { id: reg.body.therapist.id, token: reg.body.token };
+    therapist = { id: reg.testSession.id, token: reg.testSession.token };
 
     const reg2 = await request(app)
       .post('/api/v1/therapists/register')
       .send({ name: 'Dr. T2 TV', email: 'tv2@coter.com', specialty: 'psi', password: 'test1234' });
-    otherTherapist = { id: reg2.body.therapist.id, token: reg2.body.token };
+    otherTherapist = { id: reg2.testSession.id, token: reg2.testSession.token };
 
     const code = await request(app)
       .post('/api/v1/therapists/connection-codes')

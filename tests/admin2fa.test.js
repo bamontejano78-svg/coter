@@ -4,6 +4,7 @@
 // Nota: el runner inyecta ADMIN_PASSWORD vía cross-env para que config/env.js
 // lo capture de forma determinista aunque el .env local no lo tenga.
 
+require('../scripts/test-db-safety').prepareTestDatabase();
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 

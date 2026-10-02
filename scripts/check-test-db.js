@@ -1,19 +1,15 @@
 'use strict';
 
-const path = require('path');
-const savedNodeEnv = process.env.NODE_ENV;
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env'), override: false });
-// Restore NODE_ENV set by cross-env if it was provided explicitly.
-if (savedNodeEnv) process.env.NODE_ENV = savedNodeEnv;
-
+const { prepareTestDatabase } = require('./test-db-safety');
 const { Pool } = require('pg');
 
-if (process.env.NODE_ENV !== 'test') {
-  console.error('check-test-db must run with NODE_ENV=test');
+let connectionString;
+try {
+  connectionString = prepareTestDatabase();
+} catch (err) {
+  console.error('TEST_DB_UNSAFE: ' + err.message);
   process.exit(1);
 }
-
-const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/coter_test';
 // CI service containers pueden tardar más en estar listos; 10s es razonable.
 const timeout = parseInt(process.env.DB_CONNECTION_TIMEOUT_MS, 10) || 10000;
 
@@ -23,7 +19,6 @@ const pool = new Pool({
   max: 1,
   connectionTimeoutMillis: timeout,
   idleTimeoutMillis: 2000,
-  ssl: connectionString.includes('neon.tech') ? { rejectUnauthorized: false } : undefined,
 });
 
 // Retry loop: hasta 3 intentos con 2s de espera entre cada uno.

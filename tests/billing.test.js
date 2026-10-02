@@ -11,7 +11,8 @@
  *   - Registro de terapeuta crea suscripción trial automáticamente
  */
 
-const request = require('supertest');
+require('../scripts/test-db-safety').prepareTestDatabase();
+const request = require('./helpers/request');
 const { v4: uuidv4 } = require('uuid');
 const { getPool, initializeDatabase, closeDatabase } = require('../database');
 
@@ -63,13 +64,40 @@ afterAll(async () => {
 // ═══════════════════════════════════════════════════════════════
 // UNIT TESTS — utils/billing.js
 // ═══════════════════════════════════════════════════════════════
+/**
+ * Vincula N pacientes activos a un terapeuta.
+ *
+ * Por qué hace falta: checkAccess evalúa la regla del plan gratuito
+ * permanente (≤1 paciente activo → acceso permitido siempre) ANTES que el
+ * estado de la suscripción. Sin al menos 2 pacientes activos, estos tests
+ * nunca llegarían a ejercitar las reglas de bloqueo por cancelación o impago:
+ * el plan gratuito concedería acceso y la aserción fallaría por un motivo que
+ * no es el que se pretende comprobar.
+ *
+ * @param {string} therapistId
+ * @param {number} [count]
+ */
+async function addActivePatients(therapistId, count = 2) {
+  for (let i = 0; i < count; i += 1) {
+    const patientId = uuidv4();
+    await pool.query(
+      'INSERT INTO patients (id, name, email) VALUES ($1, $2, $3)',
+      [patientId, 'Paciente ' + (i + 1), 'paciente-' + patientId + '@test.com']
+    );
+    await pool.query(
+      "INSERT INTO therapist_patients (id, therapist_id, patient_id, connection_code, status)\n       VALUES ($1, $2, $3, $4, 'active')",
+      [uuidv4(), therapistId, patientId, 'CODE-' + patientId.slice(0, 8)]
+    );
+  }
+}
+
 describe('Billing Utils — createTrialSubscription', () => {
   const { createTrialSubscription } = require('../utils/billing');
   let therapistId;
 
   beforeAll(async () => {
     const { rows } = await pool.query(
-      "INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, 'Test', 'billing-unit@test.com', 'x', 'psi') RETURNING id",
+      "INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, 'Test', 'billing-unit@test.com', 'x', 'psi', NOW()) RETURNING id",
       [uuidv4()]
     );
     therapistId = rows[0].id;
@@ -125,7 +153,7 @@ describe('Billing Utils — createTrialSubscription', () => {
   test('respects custom trialDays and pricePerPatientCents', async () => {
     const customTherapistId = uuidv4();
     await pool.query(
-      'INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, $2, $3, $4, $5)',
+      'INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, $2, $3, $4, $5, NOW())',
       [customTherapistId, 'Custom', 'billing-custom@test.com', 'x', 'psi']
     );
 
@@ -154,7 +182,7 @@ describe('Billing Utils — countActivePatients', () => {
 
   beforeAll(async () => {
     const t = await pool.query(
-      "INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, 'Count', 'count@test.com', 'x', 'psi') RETURNING id",
+      "INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, 'Count', 'count@test.com', 'x', 'psi', NOW()) RETURNING id",
       [uuidv4()]
     );
     therapistId = t.rows[0].id;
@@ -211,7 +239,7 @@ describe('Billing Utils — isTrialActive', () => {
 
   beforeAll(async () => {
     const t = await pool.query(
-      "INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, 'Trial', 'trial@test.com', 'x', 'psi') RETURNING id",
+      "INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, 'Trial', 'trial@test.com', 'x', 'psi', NOW()) RETURNING id",
       [uuidv4()]
     );
     therapistId = t.rows[0].id;
@@ -270,10 +298,16 @@ describe('Billing Utils — checkAccess', () => {
 
   beforeAll(async () => {
     const t = await pool.query(
-      "INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, 'Access', 'access@test.com', 'x', 'psi') RETURNING id",
+      "INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, 'Access', 'access@test.com', 'x', 'psi', NOW()) RETURNING id",
       [uuidv4()]
     );
     therapistId = t.rows[0].id;
+
+    // 2 pacientes activos: checkAccess evalúa la regla del plan gratuito
+    // (≤1 paciente → acceso permitido siempre) ANTES que el estado de la
+    // suscripción, así que con 0 o 1 pacientes los tests de bloqueo por
+    // cancelación o impago pasarían sin ejercitar lo que dicen comprobar.
+    await addActivePatients(therapistId, 2);
   });
 
   afterAll(async () => {
@@ -362,7 +396,7 @@ describe('Billing Utils — logBillingEvent', () => {
 
   beforeAll(async () => {
     const t = await pool.query(
-      "INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, 'Log', 'log-billing@test.com', 'x', 'psi') RETURNING id",
+      "INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, 'Log', 'log-billing@test.com', 'x', 'psi', NOW()) RETURNING id",
       [uuidv4()]
     );
     therapistId = t.rows[0].id;
@@ -420,7 +454,7 @@ describe('Registration creates trial subscription', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
 
-    const therapistId = res.body.therapist.id;
+    const therapistId = res.testSession.id;
 
     // Verificar que se creó la suscripción en trial
     const { rows } = await pool.query(
@@ -461,15 +495,15 @@ describe('Registration creates trial subscription', () => {
 
     const { rows } = await pool.query(
       'SELECT therapist_id, status FROM subscriptions WHERE therapist_id = ANY($1::uuid[])',
-      [[r1.body.therapist.id, r2.body.therapist.id]]
+      [[r1.testSession.id, r2.testSession.id]]
     );
     expect(rows.length).toBe(2);
     rows.forEach(r => expect(r.status).toBe('trialing'));
 
     // Cleanup
-    await pool.query('DELETE FROM billing_events WHERE therapist_id = ANY($1::uuid[])', [[r1.body.therapist.id, r2.body.therapist.id]]);
-    await pool.query('DELETE FROM subscriptions WHERE therapist_id = ANY($1::uuid[])', [[r1.body.therapist.id, r2.body.therapist.id]]);
-    await pool.query('DELETE FROM therapists WHERE id = ANY($1::uuid[])', [[r1.body.therapist.id, r2.body.therapist.id]]);
+    await pool.query('DELETE FROM billing_events WHERE therapist_id = ANY($1::uuid[])', [[r1.testSession.id, r2.testSession.id]]);
+    await pool.query('DELETE FROM subscriptions WHERE therapist_id = ANY($1::uuid[])', [[r1.testSession.id, r2.testSession.id]]);
+    await pool.query('DELETE FROM therapists WHERE id = ANY($1::uuid[])', [[r1.testSession.id, r2.testSession.id]]);
   });
 });
 
@@ -484,8 +518,8 @@ describe('Billing Routes — GET /status', () => {
         name: 'Dr. Status', email: 'status-billing@coter.com',
         specialty: 'psi', password: 'test1234',
       });
-    therapistToken = reg.body.token;
-    therapistId = reg.body.therapist.id;
+    therapistToken = reg.testSession.token;
+    therapistId = reg.testSession.id;
   });
 
   afterAll(async () => {
@@ -546,8 +580,8 @@ describe('Billing Routes — POST /portal', () => {
         name: 'Dr. Portal', email: 'portal-billing@coter.com',
         specialty: 'psi', password: 'test1234',
       });
-    therapistToken = reg.body.token;
-    therapistId = reg.body.therapist.id;
+    therapistToken = reg.testSession.token;
+    therapistId = reg.testSession.id;
   });
 
   afterAll(async () => {
@@ -581,8 +615,8 @@ describe('Billing Routes — GET /usage', () => {
         name: 'Dr. Usage', email: 'usage-billing@coter.com',
         specialty: 'psi', password: 'test1234',
       });
-    therapistToken = reg.body.token;
-    therapistId = reg.body.therapist.id;
+    therapistToken = reg.testSession.token;
+    therapistId = reg.testSession.id;
   });
 
   afterAll(async () => {
@@ -634,8 +668,8 @@ describe('Billing Guard — authWithBilling middleware', () => {
         name: 'Dr. Guard', email: 'guard-billing@coter.com',
         specialty: 'psi', password: 'test1234',
       });
-    therapistToken = reg.body.token;
-    therapistId = reg.body.therapist.id;
+    therapistToken = reg.testSession.token;
+    therapistId = reg.testSession.id;
 
     // Terapeuta con suscripción cancelada
     const regCanceled = await request(app)
@@ -644,8 +678,12 @@ describe('Billing Guard — authWithBilling middleware', () => {
         name: 'Dr. Canceled', email: 'canceled-billing@coter.com',
         specialty: 'psi', password: 'test1234',
       });
-    canceledToken = regCanceled.body.token;
-    canceledId = regCanceled.body.therapist.id;
+    canceledToken = regCanceled.testSession.token;
+    canceledId = regCanceled.testSession.id;
+
+    // 2 pacientes activos: con ≤1 el plan gratuito permanente concede acceso
+    // aunque la suscripción esté cancelada, y el 402 esperado no se produce.
+    await addActivePatients(canceledId, 2);
 
     // Cancelar manualmente
     await pool.query(
@@ -731,7 +769,7 @@ describe('Billing Guard — does not block public routes', () => {
         name: 'Dr. Login', email: 'login-billing@coter.com',
         specialty: 'psi', password: 'test1234',
       });
-    const id = reg.body.therapist.id;
+    const id = reg.testSession.id;
 
     // Cancelar su suscripción
     await pool.query(
@@ -863,7 +901,7 @@ describe('Pioneer System', () => {
         specialty: 'psi', password: 'test1234',
       });
 
-    const therapistId = res.body.therapist.id;
+    const therapistId = res.testSession.id;
 
     const { rows } = await pool.query(
       'SELECT is_pioneer, price_locked_until, price_per_patient_cents FROM subscriptions WHERE therapist_id = $1',
@@ -892,8 +930,8 @@ describe('Pioneer System', () => {
         specialty: 'psi', password: 'test1234',
       });
 
-    const token = reg.body.token;
-    const therapistId = reg.body.therapist.id;
+    const token = reg.testSession.token;
+    const therapistId = reg.testSession.id;
 
     const res = await request(app)
       .get('/api/v1/billing/status')
@@ -913,7 +951,7 @@ describe('Pioneer System', () => {
     const { createTrialSubscription } = require('../utils/billing');
     const therapistId = uuidv4();
     await pool.query(
-      'INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, $2, $3, $4, $5)',
+      'INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, $2, $3, $4, $5, NOW())',
       [therapistId, 'CustomPrice', 'customprice@test.com', 'x', 'psi']
     );
 
@@ -935,7 +973,7 @@ describe('Pioneer System', () => {
     const { createTrialSubscription } = require('../utils/billing');
     const therapistId = uuidv4();
     await pool.query(
-      'INSERT INTO therapists (id, name, email, password, specialty) VALUES ($1, $2, $3, $4, $5)',
+      'INSERT INTO therapists (id, name, email, password, specialty, email_verified_at) VALUES ($1, $2, $3, $4, $5, NOW())',
       [therapistId, 'PioneerEvent', 'pioneerevent@test.com', 'x', 'psi']
     );
 

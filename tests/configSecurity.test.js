@@ -3,6 +3,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const KEY = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+const { assertSafeTestDatabaseUrl } = require('../scripts/test-db-safety');
 
 function runNode(script, env, cwd = ROOT) {
   const result = spawnSync(process.execPath, ['-e', script], {
@@ -18,7 +19,91 @@ function probeConfig(env) {
   return runNode(script, env);
 }
 
+describe('integration test database safety', () => {
+  test('allows only loopback PostgreSQL databases with a test name', () => {
+    expect(() => assertSafeTestDatabaseUrl('postgresql://coter:secret@localhost:5432/coter_test')).not.toThrow();
+    expect(() => assertSafeTestDatabaseUrl('postgresql://coter:secret@127.0.0.1:5432/coter-test')).not.toThrow();
+  });
+
+  test('rejects remote hosts and local non-test database names', () => {
+    expect(() => assertSafeTestDatabaseUrl('postgresql://coter:secret@db.example.net:5432/coter_test'))
+      .toThrow('must use localhost');
+    expect(() => assertSafeTestDatabaseUrl('postgresql://coter:secret@localhost:5432/coter'))
+      .toThrow('database name must clearly identify a test database');
+  });
+
+  test('rejects connection-string parameters and fragments', () => {
+    expect(() => assertSafeTestDatabaseUrl('postgresql://coter:secret@localhost:5432/coter_test?host=db.example.net'))
+      .toThrow('query parameters and fragments are not allowed');
+    expect(() => assertSafeTestDatabaseUrl('postgresql://coter:secret@localhost:5432/coter_test#remote'))
+      .toThrow('query parameters and fragments are not allowed');
+  });
+});
+
+describe('Supertest therapist registration helper', () => {
+  test('verifies successful registrations through the app and preserves the response body', async () => {
+    const express = require('express');
+    const request = require('./helpers/request');
+    const verificationToken = 'a'.repeat(64);
+    const session = {
+      id: 'therapist-test-id',
+      email: 'therapist@test.invalid',
+      token: 'test-session-token',
+      therapist: { id: 'therapist-test-id', email: 'therapist@test.invalid' },
+    };
+    const receivedTokens = [];
+    const app = express();
+
+    app.post('/api/v1/therapists/register', (_req, res) => {
+      res.json({
+        success: true,
+        requires_verification: true,
+        verification_url: `https://public.example/verify-email.html?token=${verificationToken}`,
+      });
+    });
+    app.get('/api/v1/therapists/verify-email', (req, res) => {
+      receivedTokens.push(req.query.token);
+      res.json({ success: true, token: session.token, therapist: session.therapist });
+    });
+
+    const response = await request(app)
+      .post('/api/v1/therapists/register')
+      .send({ email: 'therapist@test.invalid' });
+
+    expect(response.body).toEqual({
+      success: true,
+      requires_verification: true,
+      verification_url: `https://public.example/verify-email.html?token=${verificationToken}`,
+    });
+    expect(response.testSession).toEqual(session);
+    expect(receivedTokens).toEqual([verificationToken]);
+  });
+
+  test('leaves unsuccessful registration responses untouched', async () => {
+    const express = require('express');
+    const request = require('./helpers/request');
+    const app = express();
+    let verificationRequested = false;
+    const failure = { success: false, error: 'Email ya registrado' };
+
+    app.post('/api/v1/therapists/register', (_req, res) => res.json(failure));
+    app.get('/api/v1/therapists/verify-email', (_req, res) => {
+      verificationRequested = true;
+      res.status(500).json({ success: false });
+    });
+
+    const response = await request(app)
+      .post('/api/v1/therapists/register')
+      .send({ email: 'duplicate@test.invalid' });
+
+    expect(response.body).toEqual(failure);
+    expect(response.testSession).toBeUndefined();
+    expect(verificationRequested).toBe(false);
+  });
+});
+
 describe('secure environment configuration', () => {
+
   const baseStagingEnv = {
     NODE_ENV: 'staging',
     DATABASE_URL: 'postgresql://coter:password@postgres:5432/coter_staging',
