@@ -27,6 +27,7 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   # Registry de imágenes Docker
