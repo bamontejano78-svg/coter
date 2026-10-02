@@ -102,6 +102,21 @@ describe('Supertest therapist registration helper', () => {
   });
 });
 
+describe('request log path redaction', () => {
+  test('removes query strings and sanitizes controls before logging request targets', () => {
+    const { requestLogPath } = require('../utils/requestLogPath');
+
+    expect(requestLogPath('/api/v1/therapists/verify-email?token=one-time-secret'))
+      .toBe('/api/v1/therapists/verify-email');
+    expect(requestLogPath('/api/v1/events?ticket=sse-secret'))
+      .toBe('/api/v1/events');
+    expect(requestLogPath('/safe-path\nforged-entry'))
+      .toBe('/safe-path_forged-entry');
+    expect(requestLogPath('/api/v1/therapists/verify-email?token=log-only-placeholder'))
+      .not.toContain('log-only-placeholder');
+  });
+});
+
 describe('secure environment configuration', () => {
 
   const baseStagingEnv = {

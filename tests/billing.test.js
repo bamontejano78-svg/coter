@@ -565,7 +565,10 @@ describe('Billing Routes — GET /status', () => {
       .set('Authorization', 'Bearer ' + therapistToken);
 
     expect(res.body.subscription.patientCount).toBe(1);
-    expect(res.body.subscription.estimatedMonthlyCostCents).toBe(300); // 1 × 300
+
+    // El primer paciente activo es gratuito en el modelo freemium.
+    expect(res.body.subscription.billablePatients).toBe(0);
+    expect(res.body.subscription.estimatedMonthlyCostCents).toBe(0);
   });
 });
 

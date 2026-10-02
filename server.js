@@ -14,6 +14,7 @@ const billingRoutes = require('./routes/billing');
 const pioneersRoutes = require('./routes/pioneers');
 const adminRoutes = require('./routes/admin');
 const taskScheduler = require('./utils/taskScheduler');
+const { requestLogPath } = require('./utils/requestLogPath');
 
 const app = express();
 
@@ -61,6 +62,17 @@ app.use(express.static('www'));
 app.use(express.static('public'));
 
 // ─── Rate Limiting ────────────────────────────────────────────
+// Límite para entornos no productivos. En NODE_ENV=test se relaja porque la
+// suite de integración hace cientos de peticiones legítimas (un registro y un
+// login por cada terapeuta de prueba) y agotaría una cuota pensada para
+// tráfico humano. Ningún test comprueba el rate limiting, así que relajarlo en
+// test no oculta comportamiento. Mismo criterio que RATE_LIMIT_MAX en
+// config/env.js, que ya lo hacía para el limiter genérico.
+function nonProdLimit(prodLimit, devLimit = 100) {
+  if (process.env.NODE_ENV === 'test') return 10000;
+  return config.isProd ? prodLimit : devLimit;
+}
+
 const apiLimiter = rateLimit({
   windowMs: config.RATE_LIMIT_WINDOW_MS,
   max: config.RATE_LIMIT_MAX,
@@ -71,7 +83,7 @@ const apiLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: config.RATE_LIMIT_WINDOW_MS,
-  max: config.isProd ? 5 : 100,
+  max: nonProdLimit(5),
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Demasiados intentos, espera unos minutos' },
@@ -80,7 +92,7 @@ const authLimiter = rateLimit({
 // Rate limiting aún más estricto para registro (previene creación masiva de cuentas)
 const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hora
-  max: config.isProd ? 3 : 100,
+  max: nonProdLimit(3),
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Demasiados registros. Intenta más tarde.' },
@@ -88,7 +100,7 @@ const registerLimiter = rateLimit({
 
 const adminSessionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: config.isProd ? 5 : 100,
+  max: nonProdLimit(5),
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Demasiados intentos, espera unos minutos' },
@@ -98,7 +110,7 @@ const adminSessionLimiter = rateLimit({
 // pero aún estricto para frenar fuerza bruta sobre el código TOTP.
 const adminTwoFactorLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: config.isProd ? 10 : 100,
+  max: nonProdLimit(10),
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: 'Demasiados intentos, espera unos minutos' },
@@ -106,9 +118,22 @@ const adminTwoFactorLimiter = rateLimit({
 
 // ─── Logging HTTP ─────────────────────────────────────────────
 if (config.isProd) {
-  app.use(morgan('combined', { stream: logger.stream }));
+  // Exclude query strings: one-time verification/recovery tokens and SSE
+  // tickets may otherwise be copied to centralized access logs.
+  app.use(morgan((tokens, req, res) => [
+    tokens.method(req, res),
+    requestLogPath(req.url),
+    tokens.status(req, res),
+    tokens.res(req, res, 'content-length'), '-',
+    tokens['response-time'](req, res), 'ms',
+  ].join(' '), { stream: logger.stream, skip: (req) => req.path === '/api/v1/events' }));
 } else {
-  app.use(morgan('dev'));
+  app.use(morgan((tokens, req, res) => [
+    tokens.method(req, res),
+    requestLogPath(req.url),
+    tokens.status(req, res),
+    tokens['response-time'](req, res), 'ms',
+  ].join(' '), { skip: (req) => req.path === '/api/v1/events' }));
 }
 
 // ─── Rutas (API v1) ───────────────────────────────────────────
@@ -193,7 +218,12 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, _next) => {
-  logger.error('Error no manejado', { error: err.message, stack: err.stack, url: req.url, method: req.method });
+  logger.error('Error no manejado', {
+    error: err.message,
+    stack: err.stack,
+    path: requestLogPath(req.url),
+    method: req.method,
+  });
   const status = err.status || 500;
   res.status(status).json({
     success: false,

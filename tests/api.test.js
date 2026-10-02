@@ -3044,10 +3044,26 @@ describe('T6: Therapist view GET /patients/:id enriches assignments with latest_
       .post('/api/v1/therapists/connection-codes')
       .set('Authorization', 'Bearer ' + therapist.token)
       .send({ duration_hours: 24, max_uses: 1, patient_name: 'Paciente TV' });
+    expect(code.statusCode).toBe(200);
+    expect(code.body.success).toBe(true);
+    expect(code.body.code).toBeTruthy();
+
     const connect = await request(app)
       .post('/api/v1/patients/connect')
       .send({ connection_code: code.body.code });
-    patient = { id: connect.body.patient_id, authToken: connect.body.auth_token };
+    expect(connect.statusCode).toBe(200);
+    expect(connect.body.success).toBe(true);
+    expect(connect.body.auth_token).toBeTruthy();
+
+    // Leer el ID persistido del vínculo evita propagar silenciosamente un
+    // patient_id ausente en la respuesta hacia los INSERTs de abajo.
+    const { rows: connections } = await getPool().query(
+      'SELECT patient_id FROM therapist_patients WHERE therapist_id = $1 AND connection_code = $2',
+      [therapist.id, code.body.code]
+    );
+    expect(connections).toHaveLength(1);
+    expect(connect.body.patient_id).toBe(connections[0].patient_id);
+    patient = { id: connections[0].patient_id, authToken: connect.body.auth_token };
   });
 
   test('after completing a clinical exercise, GET /patients/:id includes latest_session merged with decrypted sensitives', async () => {
